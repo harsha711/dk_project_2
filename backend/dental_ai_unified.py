@@ -1,6 +1,8 @@
 """
 Dental AI Platform - Unified Chatbot Interface
 Combines vision and chat capabilities in single conversational interface
+
+FIXED: Annotated images are now preserved during follow-up questions
 """
 import os
 import asyncio
@@ -43,25 +45,30 @@ def process_chat_message(
     message: str,
     image: Optional[Image.Image],
     history: List,
-    conversation_state: List
-) -> Tuple[List, str, Optional[Image.Image], List, dict, List]:
+    conversation_state: List,
+    stored_annotated_images: List  # NEW: Store annotated images persistently
+) -> Tuple[List, str, Optional[Image.Image], List, dict, List, List]:
     """
     Process user message and return updated chat history
 
     Phase 3: Now maintains full conversation state for context-aware responses
+    FIXED: Annotated images are preserved across follow-up questions
 
     Args:
         message: User's text input
         image: Optional uploaded image
         history: Display history (for Gradio chatbot UI)
         conversation_state: Internal conversation state with full context
+        stored_annotated_images: Persistent storage for annotated images
 
     Returns:
-        (updated_history, cleared_message, cleared_image, annotated_images_list, gallery_update, updated_conversation_state)
+        (updated_history, cleared_message, cleared_image, annotated_images_list, gallery_update, updated_conversation_state, updated_stored_images)
     """
     # Handle empty message with no image
     if (not message or not message.strip()) and not image:
-        return history, "", None, [], gr.update(visible=False), conversation_state
+        # Return stored images to keep gallery visible
+        gallery_visible = len(stored_annotated_images) > 0
+        return history, "", None, stored_annotated_images, gr.update(visible=gallery_visible), conversation_state, stored_annotated_images
 
     # If no message but image provided, use default prompt
     if not message or not message.strip():
@@ -85,10 +92,13 @@ def process_chat_message(
         if not current_image:
             # Find most recent image in conversation history
             print(f"[IMAGE RETRIEVAL] No image in current message, searching conversation history...")
-            for entry in reversed(conversation_state):
+            print(f"[IMAGE RETRIEVAL] Conversation state has {len(conversation_state)} entries")
+            
+            for i in range(len(conversation_state) - 2, -1, -1):
+                entry = conversation_state[i]
                 if entry.get("role") == "user" and entry.get("image"):
                     current_image = entry["image"]
-                    print(f"[IMAGE RETRIEVAL] ✅ Found image from previous message (size: {current_image.size if current_image else 'None'})")
+                    print(f"[IMAGE RETRIEVAL] ✅ Found image from entry {i} (size: {current_image.size if current_image else 'None'})")
                     break
         
         if current_image:
@@ -106,7 +116,7 @@ def process_chat_message(
         responses = loop.run_until_complete(
             multimodal_chat_async(
                 message=message,
-                image=current_image,  # Always use most recent image
+                image=current_image,
                 conversation_context=context,
                 models=models,
                 openai_client=openai_client,
@@ -117,7 +127,6 @@ def process_chat_message(
         loop.close()
 
         # Handle vision responses differently (with image annotations)
-        # For vision-followup: Gemini Vision analyzes, then GPT-4o and Groq use that analysis
         if mode in ["vision", "vision-followup"]:
             # Parse vision responses and draw bounding boxes
             annotated_images = {}
@@ -126,7 +135,6 @@ def process_chat_message(
             # Process vision model responses for annotations
             for model_name, response_text in responses.items():
                 if model_name in ["gemini-vision", "groq-vision"]:
-                    # Debug logging
                     print(f"\n[VISION DEBUG] {model_name} response preview:")
                     print(f"  {response_text[:200]}...")
                     
@@ -134,21 +142,17 @@ def process_chat_message(
                     if model_name == "groq-vision" and ("not currently available" in response_text.lower() or 
                                                          "not available" in response_text.lower() or
                                                          "not supported" in response_text.lower()):
-                        print(f"  ⚠️ Groq Vision is not available - Groq may not support vision models yet")
-                        # Continue to show the message in the UI, but don't try to parse/annotate
+                        print(f"  ⚠️ Groq Vision is not available")
                         continue
 
-                    # Check if this is a follow-up question (mode is vision-followup)
-                    # For follow-ups, Gemini Vision returns natural language, not JSON
+                    # Check if this is a follow-up question
                     if mode == "vision-followup":
-                        # Follow-up question - response is natural language, not JSON
                         print(f"  ✅ Follow-up response (natural language): {response_text[:100]}...")
-                        # Don't try to parse as JSON or draw bounding boxes for follow-ups
+                        # Don't try to parse as JSON for follow-ups
                     else:
                         # Initial analysis - try to parse JSON and draw bounding boxes
                         parsed = parse_vision_response(response_text)
 
-                        # Debug logging
                         if parsed.get('error'):
                             print(f"  ❌ Parse error: {parsed.get('error')}")
                         else:
@@ -161,15 +165,11 @@ def process_chat_message(
                                 print(f"  🎨 Drawing {len(teeth)} bounding boxes")
                                 annotated = draw_bounding_boxes(current_image, teeth)
                                 annotated_images[model_name] = annotated
-                                # Add to list for inline display with label
                                 if "groq" in model_name:
                                     model_label = "Llama 3.2 Vision"
                                 else:
                                     model_label = "Gemini Vision"
                                 annotated_list.append((annotated, model_label))
-                
-                # For vision-followup mode, GPT-4o and Groq responses are handled in formatting
-                # They don't need image annotation, just text responses using Gemini's analysis
 
             # Format vision response with annotated images
             from multimodal_utils import format_vision_response
@@ -183,48 +183,44 @@ def process_chat_message(
             }
             conversation_state.append(assistant_entry)
 
-            # Update display history - include images inline in chat
-            # Format user message with image if uploaded OR if there's a recent image (for follow-ups)
-            user_message_content = message
+            # Update display history
             from image_utils import resize_image_for_chat
-            
-            # Always show the most recent image in chat (even for follow-up questions)
             image_to_display = image if image else current_image
             
+            print(f"[DISPLAY] Vision mode - image_to_display: {image_to_display is not None}")
+            
             if image_to_display:
-                # Include image in chat using dictionary format
-                # Resize image for chat display to prevent oversized images
                 resized_user_image = resize_image_for_chat(image_to_display, max_width=500, max_height=400)
-                history.append({"role": "user", "content": user_message_content, "files": [resized_user_image]})
+                print(f"[DISPLAY] ✅ Adding image to user message (size: {resized_user_image.size})")
+                history.append({"role": "user", "content": message, "files": [resized_user_image]})
             else:
-                history.append({"role": "user", "content": user_message_content})
+                print(f"[DISPLAY] ⚠️ No image to display in vision mode")
+                history.append({"role": "user", "content": message})
             
             # Assistant response with annotated images inline
             assistant_content = formatted_response
-            # Include annotated images in the assistant message
+            
+            # FIXED: Update stored images if new annotations were created
             if annotated_list and len(annotated_list) > 0:
-                # Show annotated images with bounding boxes in chat
-                # For Gradio Chatbot, show the first annotated image inline (with bounding boxes)
-                # All annotated images are also available in the gallery below
-                first_image = annotated_list[0][0]  # Get first annotated image (with bounding boxes)
-                # Resize image for chat display (max 500px width, 400px height)
-                from image_utils import resize_image_for_chat
+                # NEW annotations - update stored images
+                stored_annotated_images = annotated_list
+                first_image = annotated_list[0][0]
                 resized_image = resize_image_for_chat(first_image, max_width=500, max_height=400)
                 history.append({"role": "assistant", "content": assistant_content, "files": [resized_image]})
-                # Return gallery with all annotated images for full view
-                print(f"  ✅ Displaying {len(annotated_list)} annotated image(s) with bounding boxes")
-                return history, "", None, annotated_list, gr.update(visible=True), conversation_state
+                print(f"  ✅ Displaying {len(annotated_list)} NEW annotated image(s)")
+                return history, "", None, annotated_list, gr.update(visible=True), conversation_state, stored_annotated_images
             else:
-                # No teeth detected or parsing failed - still show original image for reference
+                # No new annotations - KEEP existing stored images visible
                 if current_image:
-                    # Resize image for chat display
-                    from image_utils import resize_image_for_chat
                     resized_image = resize_image_for_chat(current_image, max_width=500, max_height=400)
                     history.append({"role": "assistant", "content": assistant_content, "files": [resized_image]})
-                    print(f"  ⚠️ No wisdom teeth detected - showing original image")
+                    print(f"  ⚠️ No new wisdom teeth detected - keeping existing annotated images")
                 else:
                     history.append({"role": "assistant", "content": assistant_content})
-                return history, "", None, [], gr.update(visible=False), conversation_state
+                
+                # FIXED: Return stored images instead of empty list
+                gallery_visible = len(stored_annotated_images) > 0
+                return history, "", None, stored_annotated_images, gr.update(visible=gallery_visible), conversation_state, stored_annotated_images
         else:
             # Text-only responses - use standard formatting
             formatted_response = format_multi_model_response(responses)
@@ -237,29 +233,30 @@ def process_chat_message(
             }
             conversation_state.append(assistant_entry)
 
-            # Update display history - use dictionary format for Gradio Chatbot
-            # Always show the most recent image in chat (even for text-only follow-ups)
+            # Update display history
             from image_utils import resize_image_for_chat
-            
-            # Check if there's a recent image to display
             image_to_display = image if image else current_image
             
+            print(f"[DISPLAY] Text-only mode - image_to_display: {image_to_display is not None}")
+            
             if image_to_display:
-                # Include image in user message for context
                 resized_image = resize_image_for_chat(image_to_display, max_width=500, max_height=400)
+                print(f"[DISPLAY] ✅ Adding image to user message (size: {resized_image.size})")
                 history.append({"role": "user", "content": message, "files": [resized_image]})
-                # Also show image in assistant response for better context visibility
                 history.append({"role": "assistant", "content": formatted_response, "files": [resized_image]})
             else:
+                print(f"[DISPLAY] ⚠️ No image to display in text-only mode")
                 history.append({"role": "user", "content": message})
                 history.append({"role": "assistant", "content": formatted_response})
-            return history, "", None, [], gr.update(visible=False), conversation_state
+            
+            # FIXED: Keep stored images visible for text-only follow-ups
+            gallery_visible = len(stored_annotated_images) > 0
+            return history, "", None, stored_annotated_images, gr.update(visible=gallery_visible), conversation_state, stored_annotated_images
 
     except Exception as e:
         import traceback
         error_details = traceback.format_exc()
 
-        # Log full error details to console
         print("=" * 80)
         print("❌ ERROR in process_chat_message")
         print("=" * 80)
@@ -272,7 +269,6 @@ def process_chat_message(
         print(error_details)
         print("=" * 80)
 
-        # User-friendly error message
         error_msg = f"""❌ **Error Occurred**
 
 **Type:** {type(e).__name__}
@@ -286,12 +282,15 @@ If the error persists, try:
 
         history.append({"role": "user", "content": message})
         history.append({"role": "assistant", "content": error_msg})
-        return history, "", None, [], gr.update(visible=False), conversation_state
+        
+        # FIXED: Keep stored images on error
+        gallery_visible = len(stored_annotated_images) > 0
+        return history, "", None, stored_annotated_images, gr.update(visible=gallery_visible), conversation_state, stored_annotated_images
 
 
 def clear_conversation():
     """Clear conversation history and state"""
-    return [], "", []  # Clear display history, message input, and conversation state
+    return [], "", [], [], gr.update(visible=False), []  # Also clear stored images
 
 
 # ============ GRADIO UI ============
@@ -304,92 +303,64 @@ custom_css = """
 }
 
 .header-gradient {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+    padding: 1.5rem;
+    border-radius: 12px;
+    margin-bottom: 1.5rem;
     color: white;
-    padding: 30px;
-    border-radius: 10px;
-    margin-bottom: 20px;
     text-align: center;
 }
 
 .chat-container {
-    border: 2px solid #e0e0e0;
-    border-radius: 10px;
-    padding: 10px;
+    border-radius: 12px;
+    border: 1px solid #e0e0e0;
 }
 
-/* Constrain images in chat to prevent oversized display */
-.chat-container img,
-.message img,
-[class*="message"] img,
-[class*="chat"] img {
-    max-width: 500px !important;
-    max-height: 400px !important;
-    width: auto !important;
-    height: auto !important;
-    object-fit: contain !important;
+.model-badge {
+    display: inline-block;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: bold;
+    margin-right: 5px;
+}
+
+.vision-result {
+    border: 2px solid #4ECDC4;
     border-radius: 8px;
-    margin: 5px 0;
-}
-
-/* Ensure chat messages don't overflow */
-.message {
-    max-width: 100% !important;
-    overflow: hidden !important;
-}
-
-.model-response-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
-    gap: 15px;
+    padding: 15px;
     margin: 10px 0;
-}
-
-.model-card {
-    border: 2px solid;
-    border-radius: 8px;
-    padding: 12px;
-}
-
-.model-card h4 {
-    margin-top: 0;
 }
 """
 
-with gr.Blocks(title="Dental AI Platform") as demo:
-
+# Build the Gradio app
+with gr.Blocks(css=custom_css, title="Dental AI Platform") as demo:
     # Header
     gr.HTML("""
-        <div class="header-gradient">
-            <h1 style="margin: 0; font-size: 2.8em;">🦷 Dental AI Platform</h1>
-            <p style="margin: 10px 0 0 0; font-size: 1.2em;">
-                Unified Multi-Model Chatbot for Wisdom Teeth Analysis
-            </p>
-        </div>
+    <div class="header-gradient">
+        <h1 style="margin: 0; font-size: 2.2rem;">🦷 Dental AI Platform</h1>
+        <p style="margin: 0.5rem 0 0 0; opacity: 0.9;">
+            Upload dental X-rays • Get wisdom tooth analysis • Ask follow-up questions
+        </p>
+    </div>
     """)
 
     with gr.Tabs():
-
         # ============ TAB 1: UNIFIED CHATBOT ============
-        with gr.Tab("🤖 Dental AI Assistant"):
+        with gr.Tab("💬 Wisdom Tooth Assistant"):
             gr.Markdown("""
-            ### Ask questions or upload X-rays - all models respond together
-
-            **What you can do:**
-            - 💬 Ask text questions about wisdom teeth
-            - 📸 Upload dental X-rays for analysis
-            - 🔄 Have follow-up conversations with context ✨ **NEW: Phase 3**
-
-            **Available Models:**
-            - 🟢 GPT-4o (OpenAI) - Most capable reasoning (text only)
-            - 🔵 Gemini (Google) - Fast and efficient
-            - 🔵 Gemini Vision - X-ray analysis and vision tasks
-            - 🟠 Groq Llama3 - Ultra-fast inference (text only)
-            - 🟠 Llama 3.2 Vision (Groq) - Vision analysis (may not be available)
+            ### Chat with our AI dental assistants about wisdom teeth
+            **Upload an X-ray** for analysis or **ask questions** about wisdom teeth.
+            Multiple AI models will respond simultaneously for comparison.
+            
+            📌 **Note:** After uploading an X-ray, you can ask follow-up questions and the annotated image will stay visible!
             """)
 
             # Conversation state (hidden from user, tracks full context)
             conversation_state = gr.State([])
+            
+            # NEW: Store annotated images persistently
+            stored_annotated_images = gr.State([])
 
             # Chat display
             chatbot = gr.Chatbot(
@@ -440,22 +411,22 @@ with gr.Blocks(title="Dental AI Platform") as demo:
                 label="💡 Example Questions"
             )
 
-            # Event handlers
+            # Event handlers - UPDATED to include stored_annotated_images
             send_btn.click(
                 fn=process_chat_message,
-                inputs=[msg_input, image_upload, chatbot, conversation_state],
-                outputs=[chatbot, msg_input, image_upload, annotated_gallery, annotated_gallery, conversation_state]
+                inputs=[msg_input, image_upload, chatbot, conversation_state, stored_annotated_images],
+                outputs=[chatbot, msg_input, image_upload, annotated_gallery, annotated_gallery, conversation_state, stored_annotated_images]
             )
 
             msg_input.submit(
                 fn=process_chat_message,
-                inputs=[msg_input, image_upload, chatbot, conversation_state],
-                outputs=[chatbot, msg_input, image_upload, annotated_gallery, annotated_gallery, conversation_state]
+                inputs=[msg_input, image_upload, chatbot, conversation_state, stored_annotated_images],
+                outputs=[chatbot, msg_input, image_upload, annotated_gallery, annotated_gallery, conversation_state, stored_annotated_images]
             )
 
             clear_btn.click(
                 fn=clear_conversation,
-                outputs=[chatbot, msg_input, conversation_state]
+                outputs=[chatbot, msg_input, conversation_state, stored_annotated_images, annotated_gallery, stored_annotated_images]
             )
 
         # ============ TAB 2: DATASET EXPLORER ============
@@ -553,7 +524,9 @@ Use the navigation buttons to explore samples!"""
     # Footer
     gr.Markdown("""
     ---
-    **Dental AI Platform v2.0** | Unified Chatbot | Powered by OpenAI, Google, Groq, and Hugging Face
+    **Dental AI Platform v2.1** | Unified Chatbot | Powered by Groq, Google Gemini, and Hugging Face
+    
+    ⚠️ **Note:** Gemini may be rate-limited on free tier. Groq Llama Vision is recommended for consistent results.
     """)
 
 
@@ -567,7 +540,7 @@ if __name__ == "__main__":
     print("  ✅ Tab 1: Unified Chatbot (Text + Image)")
     print("     - Ask questions about wisdom teeth")
     print("     - Upload X-rays for analysis")
-    print("     - 3 models respond in parallel")
+    print("     - Annotated images persist during follow-ups")
     print("  ✅ Tab 2: Dataset Explorer (1,206 samples)")
     print("="*60 + "\n")
 
@@ -575,6 +548,5 @@ if __name__ == "__main__":
         server_name="0.0.0.0",
         server_port=7860,
         share=False,
-        show_error=True,
-        css=custom_css
+        show_error=True
     )

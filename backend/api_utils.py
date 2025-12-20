@@ -153,8 +153,8 @@ def analyze_xray_gemini(image: Image.Image) -> Dict:
     Returns: dict with location info and coordinates
     """
     try:
-        # Use gemini-2.0-flash-exp (experimental 2.0 model)
-        model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        # Use Gemini 2.5
+        model = genai.GenerativeModel('gemini-2.5-flash')
 
         prompt = """[ACADEMIC RESEARCH PROJECT - EDUCATIONAL PURPOSES ONLY]
 
@@ -212,13 +212,13 @@ If no wisdom teeth are visible, return empty teeth_found list."""
 # ============ CHAT API FUNCTIONS ============
 
 async def chat_openai_async(query: str, openai_client: OpenAI) -> Dict:
-    """Async chat with OpenAI GPT-4o"""
+    """Async chat with OpenAI GPT-4o-mini"""
     try:
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(
             None,
             lambda: openai_client.chat.completions.create(
-                model="gpt-4o",
+                model="gpt-4o-mini",
                 messages=[{"role": "user", "content": query}],
                 max_tokens=500,
                 temperature=0.7
@@ -226,13 +226,13 @@ async def chat_openai_async(query: str, openai_client: OpenAI) -> Dict:
         )
 
         return {
-            "model": "OpenAI GPT-4o",
+            "model": "OpenAI GPT-4o-mini",
             "response": response.choices[0].message.content,
             "success": True
         }
     except Exception as e:
         return {
-            "model": "OpenAI GPT-4o",
+            "model": "OpenAI GPT-4o-mini",
             "response": f"Error: {str(e)}",
             "success": False
         }
@@ -244,7 +244,7 @@ async def chat_gemini_async(query: str) -> Dict:
         loop = asyncio.get_event_loop()
 
         def sync_gemini_call():
-            model = genai.GenerativeModel('gemini-2.0-flash-exp')
+            model = genai.GenerativeModel('gemini-2.5-flash')
             response = model.generate_content(query)
             return response.text
 
@@ -306,7 +306,7 @@ async def chat_all_models(query: str, openai_client: OpenAI, groq_client: Groq) 
     processed_results = []
     for i, result in enumerate(results):
         if isinstance(result, Exception):
-            model_name = ["OpenAI GPT-4o", "Google Gemini", "Groq Llama3"][i]
+            model_name = ["OpenAI GPT-4o-mini", "Google Gemini", "Groq Llama3"][i]
             processed_results.append({
                 "model": model_name,
                 "response": f"Error: {str(result)}",
@@ -356,7 +356,7 @@ async def chat_with_context_async(
             response = await loop.run_in_executor(
                 None,
                 lambda: openai_client.chat.completions.create(
-                    model="gpt-4o",
+                    model="gpt-4o-mini",
                     messages=clean_messages,
                     max_tokens=800,
                     temperature=0.7
@@ -370,7 +370,7 @@ async def chat_with_context_async(
         
         elif model_name == "gemini":
             def sync_gemini():
-                model = genai.GenerativeModel('gemini-2.0-flash-exp')
+                model = genai.GenerativeModel('gemini-2.5-flash')
                 prompt_parts = []
                 for msg in clean_messages:
                     if msg['role'] == 'system':
@@ -447,7 +447,7 @@ async def vision_with_context_async(
 
         if model_name == "gemini-vision":
             def sync_gemini_vision():
-                model = genai.GenerativeModel('gemini-2.0-flash-exp')
+                model = genai.GenerativeModel('gemini-2.5-flash')
                 
                 # Get the current user question (last user message)
                 current_question = ""
@@ -521,10 +521,22 @@ If no wisdom teeth are visible, return empty teeth_found list."""
                 # Explicitly pass image with clear instruction
                 print(f"  📸 Sending image to Gemini Vision (size: {image.size if image else 'None'})")
                 print(f"  📝 Prompt preview: {prompt[:200]}...")
-                response = model.generate_content([prompt, image])
-                response_text = response.text
-                print(f"  ✅ Gemini Vision response preview: {response_text[:200]}...")
-                return response_text
+                try:
+                    response = model.generate_content([prompt, image])
+                    response_text = response.text
+                    print(f"  ✅ Gemini Vision response preview: {response_text[:200]}...")
+                    return response_text
+                except Exception as api_error:
+                    error_str = str(api_error)
+                    if "429" in error_str or "quota" in error_str.lower() or "ResourceExhausted" in error_str:
+                        print(f"  ⚠️ Gemini API quota exceeded")
+                        return json.dumps({
+                            "teeth_found": [],
+                            "summary": "Gemini API quota exceeded. Please wait a moment and try again, or use Groq Vision for analysis."
+                        })
+                    else:
+                        # Re-raise other errors
+                        raise
 
             response_text = await loop.run_in_executor(None, sync_gemini_vision)
             return {

@@ -114,7 +114,7 @@ def route_message(
             mode, models = "vision", ["gemini-vision", "groq-vision"]
         elif has_recent_image and mentions_image:
             # Follow-up question about previous image
-            # Use Gemini Vision to re-analyze, then GPT-4o and Groq use Gemini's analysis as context
+            # Use Gemini Vision to re-analyze, then GPT-4o-mini and Groq use Gemini's analysis as context
             mode, models = "vision-followup", ["gemini-vision", "gpt4", "groq"]
         else:
             # Text-only question - use all chat models (including Groq)
@@ -187,7 +187,7 @@ def build_conversation_context(
 
         elif msg['role'] == 'assistant':
             # Use primary model's response for context
-            # For GPT-4o context, prefer GPT-4o's own response, but fallback to any available response
+            # For GPT-4o-mini context, prefer GPT-4o-mini's own response, but fallback to any available response
             model_responses = msg.get('model_responses', {})
             
             # Debug: Print what model responses are available
@@ -195,7 +195,7 @@ def build_conversation_context(
                 available_keys = list(model_responses.keys())
                 print(f"  [CONTEXT] Assistant message has responses from: {available_keys}")
             
-            # For text models (GPT-4o, Groq), we need to include vision analysis in context
+            # For text models (GPT-4o-mini, Groq), we need to include vision analysis in context
             # Priority: text responses > vision responses (converted to natural language)
             # Check for both gemini-vision and groq-vision responses
             
@@ -293,7 +293,7 @@ def format_multi_model_response(responses: Dict[str, str]) -> str:
 <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px;">
 
 <div style="border: 2px solid #667eea; border-radius: 8px; padding: 12px;">
-<h4 style="margin-top: 0; color: #667eea;">🟢 GPT-4o</h4>
+<h4 style="margin-top: 0; color: #667eea;">🟢 GPT-4o-mini</h4>
 {gpt4}
 </div>
 
@@ -344,7 +344,7 @@ def format_vision_response(
     has_text_models = bool(gpt4_text or groq_text)
     
     if has_text_models:
-        # Follow-up question: Show Gemini Vision analysis + GPT-4o + Groq responses
+        # Follow-up question: Show Gemini Vision analysis + GPT-4o-mini + Groq responses
         formatted = f"""### 🔍 Follow-up Analysis (Based on Gemini Vision's Findings)
 
 <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px;">
@@ -355,7 +355,7 @@ def format_vision_response(
 </div>
 
 <div style="border: 2px solid #667eea; border-radius: 8px; padding: 12px;">
-<h4 style="margin-top: 0; color: #667eea;">🟢 GPT-4o</h4>
+<h4 style="margin-top: 0; color: #667eea;">🟢 GPT-4o-mini</h4>
 {gpt4_text if gpt4_text else 'No response'}
 </div>
 
@@ -366,7 +366,7 @@ def format_vision_response(
 
 </div>
 
-<p><em>💡 GPT-4o and Groq are answering based on Gemini Vision's analysis of the X-ray.</em></p>
+<p><em>💡 GPT-4o-mini and Groq are answering based on Gemini Vision's analysis of the X-ray.</em></p>
 """
     else:
         # Initial analysis: Gemini Vision (and Groq Vision if available)
