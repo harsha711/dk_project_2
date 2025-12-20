@@ -44,30 +44,41 @@ def route_message(
     Returns:
         (mode, model_list) where mode is "vision", "vision-followup", or "chat"
     """
-    has_image = image is not None
-    has_recent_image = any(
-        msg.get('image') is not None
-        for msg in history[-3:] if msg.get('role') == 'user'
-    )
+    try:
+        has_image = image is not None
+        has_recent_image = any(
+            msg.get('image') is not None
+            for msg in history[-3:] if msg.get('role') == 'user'
+        )
 
-    # Check if message references previous image
-    image_refs = [
-        'this x-ray', 'the image', 'this image', 'the x-ray',
-        'in the picture', 'what you see', 'from the scan',
-        'it', 'this', 'that'
-    ]
-    mentions_image = any(ref in message.lower() for ref in image_refs)
+        # Check if message references previous image
+        image_refs = [
+            'this x-ray', 'the image', 'this image', 'the x-ray',
+            'in the picture', 'what you see', 'from the scan',
+            'it', 'this', 'that'
+        ]
+        mentions_image = any(ref in message.lower() for ref in image_refs)
 
-    if has_image:
-        # User uploaded new image - use vision models
-        return "vision", ["gpt4-vision", "gemini-vision"]
+        if has_image:
+            # User uploaded new image - use vision models
+            mode, models = "vision", ["gpt4-vision", "gemini-vision"]
+        elif has_recent_image and mentions_image:
+            # Follow-up question about previous image
+            mode, models = "vision-followup", ["gpt4-vision", "gemini-vision"]
+        else:
+            # Text-only question - use all chat models
+            mode, models = "chat", ["gpt4", "gemini", "groq"]
 
-    elif has_recent_image and mentions_image:
-        # Follow-up question about previous image
-        return "vision-followup", ["gpt4-vision", "gemini-vision"]
+        # Log routing decision
+        print(f"[ROUTING] Mode: {mode}, Models: {models}, Has Image: {has_image}, Has Recent: {has_recent_image}")
 
-    else:
-        # Text-only question - use all chat models
+        return mode, models
+
+    except Exception as e:
+        print(f"❌ ERROR in route_message: {e}")
+        import traceback
+        traceback.print_exc()
+        # Default to chat mode on error
         return "chat", ["gpt4", "gemini", "groq"]
 
 
@@ -110,9 +121,15 @@ def build_conversation_context(
             messages.append(user_msg)
 
         elif msg['role'] == 'assistant':
-            # Use primary model's response (GPT-4o) for context
-            # This provides coherent conversation thread
-            primary_response = msg.get('model_responses', {}).get('gpt4', '')
+            # Use primary model's response for context
+            # Prefer gpt4-vision for vision responses, gpt4 for text
+            model_responses = msg.get('model_responses', {})
+            primary_response = (
+                model_responses.get('gpt4-vision', '') or
+                model_responses.get('gpt4', '') or
+                model_responses.get('gemini-vision', '') or
+                model_responses.get('gemini', '')
+            )
             if primary_response:
                 messages.append({
                     "role": "assistant",

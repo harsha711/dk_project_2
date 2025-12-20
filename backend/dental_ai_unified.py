@@ -37,38 +37,51 @@ openai_client, groq_client = init_clients()
 dataset_manager = TeethDatasetManager()
 
 
-# ============ PHASE 1: BASIC TEXT CHAT ============
+# ============ PHASE 3: CONVERSATION HISTORY ============
 
 def process_chat_message(
     message: str,
     image: Optional[Image.Image],
-    history: List
-) -> Tuple[List, str, Optional[Image.Image], List, dict]:
+    history: List,
+    conversation_state: List
+) -> Tuple[List, str, Optional[Image.Image], List, dict, List]:
     """
     Process user message and return updated chat history
+
+    Phase 3: Now maintains full conversation state for context-aware responses
 
     Args:
         message: User's text input
         image: Optional uploaded image
-        history: Current chat history
+        history: Display history (for Gradio chatbot UI)
+        conversation_state: Internal conversation state with full context
 
     Returns:
-        (updated_history, cleared_message, cleared_image, annotated_images_list, gallery_update)
+        (updated_history, cleared_message, cleared_image, annotated_images_list, gallery_update, updated_conversation_state)
     """
     # Handle empty message with no image
     if (not message or not message.strip()) and not image:
-        return history, "", None, [], gr.update(visible=False)
+        return history, "", None, [], gr.update(visible=False), conversation_state
 
     # If no message but image provided, use default prompt
     if not message or not message.strip():
         message = "Analyze this dental X-ray for wisdom teeth."
 
     try:
-        # Determine which models to use
-        mode, models = route_message(message, image, history)
+        # Add user message to conversation state
+        user_entry = {
+            "role": "user",
+            "content": message,
+            "image": image,
+            "timestamp": time.time()
+        }
+        conversation_state.append(user_entry)
 
-        # Build conversation context
-        context = build_conversation_context(history, max_turns=5)
+        # Determine which models to use (now checks conversation_state for recent images)
+        mode, models = route_message(message, image, conversation_state)
+
+        # Build conversation context from state
+        context = build_conversation_context(conversation_state, max_turns=5)
 
         # Call models (async)
         loop = asyncio.new_event_loop()
@@ -88,7 +101,16 @@ def process_chat_message(
         loop.close()
 
         # Handle vision responses differently (with image annotations)
-        if mode in ["vision", "vision-followup"] and image:
+        if mode in ["vision", "vision-followup"]:
+            # For vision-followup, retrieve the most recent image from conversation state
+            current_image = image
+            if mode == "vision-followup" and not current_image:
+                # Find most recent image in conversation history
+                for entry in reversed(conversation_state[:-1]):  # Exclude current message
+                    if entry.get("role") == "user" and entry.get("image"):
+                        current_image = entry["image"]
+                        break
+
             # Parse vision responses and draw bounding boxes
             annotated_images = {}
             annotated_list = []
@@ -99,10 +121,10 @@ def process_chat_message(
                     parsed = parse_vision_response(response_text)
 
                     # If teeth were detected with bounding boxes, draw them
-                    if parsed.get('teeth_found') and not parsed.get('error'):
+                    if parsed.get('teeth_found') and not parsed.get('error') and current_image:
                         teeth = parsed.get('teeth_found', [])
                         if teeth and isinstance(teeth, list):
-                            annotated = draw_bounding_boxes(image, teeth)
+                            annotated = draw_bounding_boxes(current_image, teeth)
                             annotated_images[model_name] = annotated
                             # Add to list for gallery with label
                             model_label = "GPT-4o Vision" if "gpt4" in model_name else "Gemini Vision"
@@ -112,33 +134,77 @@ def process_chat_message(
             from multimodal_utils import format_vision_response
             formatted_response = format_vision_response(responses, annotated_images)
 
-            # Store image in history for follow-up questions (Phase 3)
-            # For now, just display the response
-            history.append((message, formatted_response))
+            # Add assistant response to conversation state
+            assistant_entry = {
+                "role": "assistant",
+                "model_responses": responses,
+                "timestamp": time.time()
+            }
+            conversation_state.append(assistant_entry)
+
+            # Update display history - use dictionary format for Gradio
+            history.append({"role": "user", "content": message})
+            history.append({"role": "assistant", "content": formatted_response})
 
             # Show gallery if we have annotated images
             if annotated_list:
-                return history, "", None, annotated_list, gr.update(visible=True)
+                return history, "", None, annotated_list, gr.update(visible=True), conversation_state
             else:
-                return history, "", None, [], gr.update(visible=False)
+                return history, "", None, [], gr.update(visible=False), conversation_state
         else:
             # Text-only responses - use standard formatting
             formatted_response = format_multi_model_response(responses)
-            history.append((message, formatted_response))
-            return history, "", None, [], gr.update(visible=False)
+
+            # Add assistant response to conversation state
+            assistant_entry = {
+                "role": "assistant",
+                "model_responses": responses,
+                "timestamp": time.time()
+            }
+            conversation_state.append(assistant_entry)
+
+            # Update display history - use dictionary format for Gradio
+            history.append({"role": "user", "content": message})
+            history.append({"role": "assistant", "content": formatted_response})
+            return history, "", None, [], gr.update(visible=False), conversation_state
 
     except Exception as e:
-        error_msg = f"❌ Error: {str(e)}\n\nDetails: {type(e).__name__}"
         import traceback
         error_details = traceback.format_exc()
-        print(f"Error in process_chat_message: {error_details}")
-        history.append((message, error_msg))
-        return history, "", None, [], gr.update(visible=False)
+
+        # Log full error details to console
+        print("=" * 80)
+        print("❌ ERROR in process_chat_message")
+        print("=" * 80)
+        print(f"Error Type: {type(e).__name__}")
+        print(f"Error Message: {str(e)}")
+        print(f"\nInput Message: {message}")
+        print(f"Has Image: {image is not None}")
+        print(f"Conversation State Length: {len(conversation_state)}")
+        print("\nFull Traceback:")
+        print(error_details)
+        print("=" * 80)
+
+        # User-friendly error message
+        error_msg = f"""❌ **Error Occurred**
+
+**Type:** {type(e).__name__}
+**Message:** {str(e)}
+
+Please check the console for detailed error logs.
+If the error persists, try:
+1. Clearing the conversation
+2. Refreshing the page
+3. Checking your API keys in .env file"""
+
+        history.append({"role": "user", "content": message})
+        history.append({"role": "assistant", "content": error_msg})
+        return history, "", None, [], gr.update(visible=False), conversation_state
 
 
 def clear_conversation():
-    """Clear conversation history"""
-    return [], ""
+    """Clear conversation history and state"""
+    return [], "", []  # Clear display history, message input, and conversation state
 
 
 # ============ GRADIO UI ============
@@ -205,13 +271,16 @@ with gr.Blocks(title="Dental AI Platform") as demo:
             **What you can do:**
             - 💬 Ask text questions about wisdom teeth
             - 📸 Upload dental X-rays for analysis
-            - 🔄 Have follow-up conversations with context
+            - 🔄 Have follow-up conversations with context ✨ **NEW: Phase 3**
 
             **Available Models:**
             - 🟢 GPT-4o (OpenAI) - Most capable reasoning
             - 🔵 Gemini (Google) - Fast and efficient
             - 🟠 Groq Llama3 - Ultra-fast inference
             """)
+
+            # Conversation state (hidden from user, tracks full context)
+            conversation_state = gr.State([])
 
             # Chat display
             chatbot = gr.Chatbot(
@@ -265,19 +334,19 @@ with gr.Blocks(title="Dental AI Platform") as demo:
             # Event handlers
             send_btn.click(
                 fn=process_chat_message,
-                inputs=[msg_input, image_upload, chatbot],
-                outputs=[chatbot, msg_input, image_upload, annotated_gallery, annotated_gallery]
+                inputs=[msg_input, image_upload, chatbot, conversation_state],
+                outputs=[chatbot, msg_input, image_upload, annotated_gallery, annotated_gallery, conversation_state]
             )
 
             msg_input.submit(
                 fn=process_chat_message,
-                inputs=[msg_input, image_upload, chatbot],
-                outputs=[chatbot, msg_input, image_upload, annotated_gallery, annotated_gallery]
+                inputs=[msg_input, image_upload, chatbot, conversation_state],
+                outputs=[chatbot, msg_input, image_upload, annotated_gallery, annotated_gallery, conversation_state]
             )
 
             clear_btn.click(
                 fn=clear_conversation,
-                outputs=[chatbot, msg_input]
+                outputs=[chatbot, msg_input, conversation_state]
             )
 
         # ============ TAB 2: DATASET EXPLORER ============
