@@ -153,8 +153,8 @@ def analyze_xray_gemini(image: Image.Image) -> Dict:
     Returns: dict with location info and coordinates
     """
     try:
-        # Use gemini-2.0-flash (current stable model as of Dec 2024)
-        model = genai.GenerativeModel('gemini-2.0-flash')
+        # Use gemini-2.0-flash-exp (experimental 2.0 model)
+        model = genai.GenerativeModel('gemini-2.0-flash-exp')
 
         prompt = """[ACADEMIC RESEARCH PROJECT - EDUCATIONAL PURPOSES ONLY]
 
@@ -244,7 +244,7 @@ async def chat_gemini_async(query: str) -> Dict:
         loop = asyncio.get_event_loop()
 
         def sync_gemini_call():
-            model = genai.GenerativeModel('gemini-2.0-flash')
+            model = genai.GenerativeModel('gemini-2.0-flash-exp')
             response = model.generate_content(query)
             return response.text
 
@@ -345,6 +345,13 @@ async def chat_with_context_async(
             clean_msg = {"role": msg["role"], "content": content}
             clean_messages.append(clean_msg)
 
+        # Debug: Log context being sent to text models
+        print(f"[{model_name.upper()} CONTEXT] Sending {len(clean_messages)} messages:")
+        for i, msg in enumerate(clean_messages[-3:]):  # Show last 3 messages
+            role = msg.get('role', 'unknown')
+            content_preview = str(msg.get('content', ''))[:100]
+            print(f"  [{i}] {role}: {content_preview}...")
+
         if model_name == "gpt4":
             response = await loop.run_in_executor(
                 None,
@@ -363,7 +370,7 @@ async def chat_with_context_async(
         
         elif model_name == "gemini":
             def sync_gemini():
-                model = genai.GenerativeModel('gemini-2.0-flash')
+                model = genai.GenerativeModel('gemini-2.0-flash-exp')
                 prompt_parts = []
                 for msg in clean_messages:
                     if msg['role'] == 'system':
@@ -423,28 +430,73 @@ async def vision_with_context_async(
         loop = asyncio.get_event_loop()
         
         if image is None:
+            print(f"  ❌ ERROR: No image provided to {model_name} for vision analysis")
+            print(f"     Messages count: {len(messages)}")
+            # Check if image is in any message
+            for i, msg in enumerate(messages):
+                if msg.get('image'):
+                    print(f"     Found image in message {i}: {type(msg.get('image'))}")
             return {
                 "model": model_name,
-                "response": "No image provided for vision analysis",
+                "response": json.dumps({
+                    "teeth_found": [],
+                    "summary": "Error: No image was provided for vision analysis. Please upload an X-ray image."
+                }),
                 "success": False
             }
 
         if model_name == "gemini-vision":
             def sync_gemini_vision():
-                model = genai.GenerativeModel('gemini-2.0-flash')
+                model = genai.GenerativeModel('gemini-2.0-flash-exp')
                 
-                prompt_parts = []
+                # Get the current user question (last user message)
+                current_question = ""
+                conversation_context = ""
+                # Get the last user message as the current question
+                for msg in reversed(messages):
+                    if msg['role'] == 'user':
+                        if not current_question:
+                            current_question = msg['content']
+                            break
+                
+                # Build conversation context (all messages)
                 for msg in messages:
                     if msg['role'] == 'user':
-                        prompt_parts.append(f"User: {msg['content']}")
+                        conversation_context += f"User: {msg['content']}\n"
                     elif msg['role'] == 'assistant':
-                        prompt_parts.append(f"Assistant: {msg['content']}")
+                        conversation_context += f"Assistant: {msg['content']}\n"
 
-                prompt = "\n".join(prompt_parts) + """
+                # Build explicit prompt that makes it clear the image is provided
+                if current_question and current_question.lower() not in ["analyze this dental x-ray", "analyze this x-ray", "analyze this dental x-ray for wisdom teeth."]:
+                    # This is a follow-up question - answer naturally, don't force JSON
+                    prompt = f"""You are a dental assistant. A dental X-ray image is attached to this message - you can see it below.
+
+The user is asking: "{current_question}"
+
+Previous conversation:
+{conversation_context}
+
+CRITICAL: Look at the X-ray image that is provided with this message. The image is visible to you. Analyze it and answer the user's question based on what you see in the X-ray.
 
 [ACADEMIC RESEARCH - EDUCATIONAL SAMPLE]
 
-Analyze this sample dental X-ray for educational demonstration purposes. Identify wisdom teeth locations and describe their positions and conditions as a training example.
+Instructions:
+1. Look at the dental X-ray image provided below
+2. Answer the user's question: "{current_question}"
+3. Base your answer on what you see in the X-ray image
+4. Be specific about wisdom teeth positions, conditions, impaction, etc.
+5. Use natural, conversational language - do NOT use JSON format
+
+Answer the question directly and helpfully based on the X-ray image you can see.
+
+This is for academic research only, not clinical diagnosis."""
+                else:
+                    # Initial analysis - standard prompt
+                    prompt = f"""{conversation_context}
+
+[ACADEMIC RESEARCH - EDUCATIONAL SAMPLE]
+
+Analyze the provided dental X-ray image for educational demonstration purposes. Identify wisdom teeth locations and describe their positions and conditions as a training example.
 
 For each wisdom tooth found, provide:
 1. Position (upper-left, upper-right, lower-left, lower-right)
@@ -452,22 +504,27 @@ For each wisdom tooth found, provide:
 3. Brief description of tooth condition
 
 Format your response as JSON:
-{
+{{
     "teeth_found": [
-        {
+        {{
             "position": "lower-right",
             "bbox": [0.6, 0.7, 0.85, 0.95],
             "description": "Impacted wisdom tooth"
-        }
+        }}
     ],
     "summary": "Brief overall summary"
-}
+}}
 
 This is for academic research only, not clinical diagnosis.
 If no wisdom teeth are visible, return empty teeth_found list."""
 
+                # Explicitly pass image with clear instruction
+                print(f"  📸 Sending image to Gemini Vision (size: {image.size if image else 'None'})")
+                print(f"  📝 Prompt preview: {prompt[:200]}...")
                 response = model.generate_content([prompt, image])
-                return response.text
+                response_text = response.text
+                print(f"  ✅ Gemini Vision response preview: {response_text[:200]}...")
+                return response_text
 
             response_text = await loop.run_in_executor(None, sync_gemini_vision)
             return {

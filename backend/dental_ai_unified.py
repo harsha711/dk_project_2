@@ -84,10 +84,17 @@ def process_chat_message(
         current_image = image
         if not current_image:
             # Find most recent image in conversation history
+            print(f"[IMAGE RETRIEVAL] No image in current message, searching conversation history...")
             for entry in reversed(conversation_state):
                 if entry.get("role") == "user" and entry.get("image"):
                     current_image = entry["image"]
+                    print(f"[IMAGE RETRIEVAL] ✅ Found image from previous message (size: {current_image.size if current_image else 'None'})")
                     break
+        
+        if current_image:
+            print(f"[IMAGE RETRIEVAL] ✅ Using image for vision analysis (size: {current_image.size})")
+        else:
+            print(f"[IMAGE RETRIEVAL] ⚠️ WARNING: No image found for vision analysis!")
 
         # Build conversation context from state
         context = build_conversation_context(conversation_state, max_turns=5)
@@ -131,28 +138,35 @@ def process_chat_message(
                         # Continue to show the message in the UI, but don't try to parse/annotate
                         continue
 
-                    # Try to parse structured response
-                    parsed = parse_vision_response(response_text)
-
-                    # Debug logging
-                    if parsed.get('error'):
-                        print(f"  ❌ Parse error: {parsed.get('error')}")
+                    # Check if this is a follow-up question (mode is vision-followup)
+                    # For follow-ups, Gemini Vision returns natural language, not JSON
+                    if mode == "vision-followup":
+                        # Follow-up question - response is natural language, not JSON
+                        print(f"  ✅ Follow-up response (natural language): {response_text[:100]}...")
+                        # Don't try to parse as JSON or draw bounding boxes for follow-ups
                     else:
-                        print(f"  ✅ Parsed successfully, found {len(parsed.get('teeth_found', []))} teeth")
+                        # Initial analysis - try to parse JSON and draw bounding boxes
+                        parsed = parse_vision_response(response_text)
 
-                    # If teeth were detected with bounding boxes, draw them
-                    if parsed.get('teeth_found') and not parsed.get('error') and current_image:
-                        teeth = parsed.get('teeth_found', [])
-                        if teeth and isinstance(teeth, list) and len(teeth) > 0:
-                            print(f"  🎨 Drawing {len(teeth)} bounding boxes")
-                            annotated = draw_bounding_boxes(current_image, teeth)
-                            annotated_images[model_name] = annotated
-                            # Add to list for inline display with label
-                            if "groq" in model_name:
-                                model_label = "Llama 3.2 Vision"
-                            else:
-                                model_label = "Gemini Vision"
-                            annotated_list.append((annotated, model_label))
+                        # Debug logging
+                        if parsed.get('error'):
+                            print(f"  ❌ Parse error: {parsed.get('error')}")
+                        else:
+                            print(f"  ✅ Parsed successfully, found {len(parsed.get('teeth_found', []))} teeth")
+
+                        # If teeth were detected with bounding boxes, draw them
+                        if parsed.get('teeth_found') and not parsed.get('error') and current_image:
+                            teeth = parsed.get('teeth_found', [])
+                            if teeth and isinstance(teeth, list) and len(teeth) > 0:
+                                print(f"  🎨 Drawing {len(teeth)} bounding boxes")
+                                annotated = draw_bounding_boxes(current_image, teeth)
+                                annotated_images[model_name] = annotated
+                                # Add to list for inline display with label
+                                if "groq" in model_name:
+                                    model_label = "Llama 3.2 Vision"
+                                else:
+                                    model_label = "Gemini Vision"
+                                annotated_list.append((annotated, model_label))
                 
                 # For vision-followup mode, GPT-4o and Groq responses are handled in formatting
                 # They don't need image annotation, just text responses using Gemini's analysis
@@ -170,13 +184,17 @@ def process_chat_message(
             conversation_state.append(assistant_entry)
 
             # Update display history - include images inline in chat
-            # Format user message with image if uploaded (dictionary format for Gradio)
+            # Format user message with image if uploaded OR if there's a recent image (for follow-ups)
             user_message_content = message
-            if image:
-                # User uploaded image - include it in chat using dictionary format
+            from image_utils import resize_image_for_chat
+            
+            # Always show the most recent image in chat (even for follow-up questions)
+            image_to_display = image if image else current_image
+            
+            if image_to_display:
+                # Include image in chat using dictionary format
                 # Resize image for chat display to prevent oversized images
-                from image_utils import resize_image_for_chat
-                resized_user_image = resize_image_for_chat(image, max_width=500, max_height=400)
+                resized_user_image = resize_image_for_chat(image_to_display, max_width=500, max_height=400)
                 history.append({"role": "user", "content": user_message_content, "files": [resized_user_image]})
             else:
                 history.append({"role": "user", "content": user_message_content})
@@ -220,8 +238,21 @@ def process_chat_message(
             conversation_state.append(assistant_entry)
 
             # Update display history - use dictionary format for Gradio Chatbot
-            history.append({"role": "user", "content": message})
-            history.append({"role": "assistant", "content": formatted_response})
+            # Always show the most recent image in chat (even for text-only follow-ups)
+            from image_utils import resize_image_for_chat
+            
+            # Check if there's a recent image to display
+            image_to_display = image if image else current_image
+            
+            if image_to_display:
+                # Include image in user message for context
+                resized_image = resize_image_for_chat(image_to_display, max_width=500, max_height=400)
+                history.append({"role": "user", "content": message, "files": [resized_image]})
+                # Also show image in assistant response for better context visibility
+                history.append({"role": "assistant", "content": formatted_response, "files": [resized_image]})
+            else:
+                history.append({"role": "user", "content": message})
+                history.append({"role": "assistant", "content": formatted_response})
             return history, "", None, [], gr.update(visible=False), conversation_state
 
     except Exception as e:

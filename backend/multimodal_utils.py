@@ -30,6 +30,54 @@ Guidelines:
 IMPORTANT DISCLAIMER: This is for educational and informational purposes only. Not for clinical diagnosis. Real medical decisions must be made by licensed dental professionals."""
 
 
+def convert_vision_to_text(vision_responses: List[tuple]) -> str:
+    """
+    Convert vision model responses (JSON or natural language) to readable text for context
+    
+    Args:
+        vision_responses: List of tuples (model_name, response_text)
+    
+    Returns:
+        Natural language summary of vision analysis
+    """
+    summary_parts = []
+    
+    for model_name, vision_response in vision_responses:
+        if not vision_response:
+            continue
+            
+        try:
+            import json
+            # Try to parse as JSON
+            parsed = json.loads(vision_response)
+            if isinstance(parsed, dict):
+                # Create a natural language summary from JSON
+                model_summary = []
+                if parsed.get('summary'):
+                    model_summary.append(f"{parsed['summary']}")
+                if parsed.get('teeth_found') and isinstance(parsed['teeth_found'], list):
+                    teeth_count = len(parsed['teeth_found'])
+                    if teeth_count > 0:
+                        model_summary.append(f"Found {teeth_count} wisdom tooth/teeth:")
+                        for tooth in parsed['teeth_found']:
+                            pos = tooth.get('position', 'unknown')
+                            desc = tooth.get('description', 'no description')
+                            model_summary.append(f"- {pos}: {desc}")
+                    else:
+                        model_summary.append("No wisdom teeth detected.")
+                
+                if model_summary:
+                    summary_parts.append(f"[{model_name}]: {' '.join(model_summary)}")
+        except (json.JSONDecodeError, AttributeError, TypeError):
+            # Not JSON or parsing failed - use as-is (might be natural language already)
+            # Check if it's an error message or unavailable message
+            response_str = str(vision_response).lower()
+            if "not currently available" not in response_str and "not available" not in response_str:
+                summary_parts.append(f"[{model_name}]: {vision_response}")
+    
+    return "\n".join(summary_parts) if summary_parts else ""
+
+
 def route_message(
     message: str,
     image: Optional[Image.Image],
@@ -147,15 +195,45 @@ def build_conversation_context(
                 available_keys = list(model_responses.keys())
                 print(f"  [CONTEXT] Assistant message has responses from: {available_keys}")
             
-            # For vision follow-ups, prioritize Gemini Vision's analysis for context
-            # This allows GPT-4o and Groq to use Gemini's findings to answer follow-up questions
-            # Priority: gemini-vision (for vision context) > gpt4 > gemini > groq
-            primary_response = (
-                model_responses.get('gemini-vision', '') or  # Prioritize Gemini Vision analysis
+            # For text models (GPT-4o, Groq), we need to include vision analysis in context
+            # Priority: text responses > vision responses (converted to natural language)
+            # Check for both gemini-vision and groq-vision responses
+            
+            # First, try to get text responses (best for context)
+            text_response = (
                 model_responses.get('gpt4', '') or
                 model_responses.get('gemini', '') or
                 model_responses.get('groq', '')
             )
+            
+            # Check for vision responses (gemini-vision or groq-vision)
+            vision_responses = []
+            if model_responses.get('gemini-vision'):
+                vision_responses.append(('Gemini Vision', model_responses.get('gemini-vision')))
+            if model_responses.get('groq-vision'):
+                vision_responses.append(('Groq Vision', model_responses.get('groq-vision')))
+            
+            # If we have text responses, use them as primary
+            if text_response:
+                primary_response = text_response
+                # Also append vision analysis if available (for better context)
+                # This ensures text models see the vision analysis even if there are text responses
+                if vision_responses:
+                    vision_summary = convert_vision_to_text(vision_responses)
+                    if vision_summary:
+                        primary_response = f"{text_response}\n\n[Previous Vision Analysis: {vision_summary}]"
+                        print(f"  [CONTEXT] Added vision analysis to text response context")
+            elif vision_responses:
+                # Only have vision responses - convert to natural language
+                # This is the case for initial image analysis
+                primary_response = convert_vision_to_text(vision_responses)
+                if primary_response:
+                    print(f"  [CONTEXT] Using vision analysis as context (converted to natural language)")
+                else:
+                    primary_response = None
+            else:
+                # No responses available
+                primary_response = None
             
             # Always include assistant response if available (even if empty, to maintain structure)
             # This ensures conversation flow is preserved
