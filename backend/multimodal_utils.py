@@ -10,6 +10,8 @@ import re
 # System prompt for wisdom teeth specialist
 SYSTEM_PROMPT = """You are a dental assistant specializing in wisdom teeth. You can analyze dental X-rays and answer follow-up questions about them. Stay focused on wisdom teeth topics.
 
+IMPORTANT: You have access to the full conversation history. When users ask follow-up questions, use the previous conversation context to provide relevant answers. Remember what was discussed earlier in the conversation.
+
 Your expertise includes:
 - Wisdom tooth anatomy, development, and eruption patterns
 - Common problems: impaction, pericoronitis, cysts, damage to adjacent teeth
@@ -19,9 +21,11 @@ Your expertise includes:
 
 Guidelines:
 - Provide clear, helpful information about wisdom teeth
+- Use conversation history to answer follow-up questions contextually
 - Be specific about tooth positions (e.g., "upper right third molar #1", "lower left #17")
 - When analyzing X-rays, describe: position, impaction angle, root formation, proximity to nerves
 - Focus on wisdom teeth topics and stay on-topic
+- If a user references something from earlier in the conversation, use that context in your response
 
 IMPORTANT DISCLAIMER: This is for educational and informational purposes only. Not for clinical diagnosis. Real medical decisions must be made by licensed dental professionals."""
 
@@ -58,13 +62,14 @@ def route_message(
         mentions_image = any(ref in message.lower() for ref in image_refs)
 
         if has_image:
-            # User uploaded new image - use vision models + Groq for text response
-            mode, models = "vision", ["gpt4-vision", "gemini-vision", "groq"]
+            # User uploaded new image - use vision models (Gemini Vision only, GPT-4o Vision removed due to refusals)
+            mode, models = "vision", ["gemini-vision", "groq-vision"]
         elif has_recent_image and mentions_image:
-            # Follow-up question about previous image - use vision models + Groq
-            mode, models = "vision-followup", ["gpt4-vision", "gemini-vision", "groq"]
+            # Follow-up question about previous image
+            # Use Gemini Vision to re-analyze, then GPT-4o and Groq use Gemini's analysis as context
+            mode, models = "vision-followup", ["gemini-vision", "gpt4", "groq"]
         else:
-            # Text-only question - use all chat models
+            # Text-only question - use all chat models (including Groq)
             mode, models = "chat", ["gpt4", "gemini", "groq"]
 
         # Log routing decision
@@ -134,18 +139,48 @@ def build_conversation_context(
 
         elif msg['role'] == 'assistant':
             # Use primary model's response for context
-            # Prefer gpt4-vision for vision responses, gpt4 for text
+            # For GPT-4o context, prefer GPT-4o's own response, but fallback to any available response
             model_responses = msg.get('model_responses', {})
+            
+            # Debug: Print what model responses are available
+            if model_responses:
+                available_keys = list(model_responses.keys())
+                print(f"  [CONTEXT] Assistant message has responses from: {available_keys}")
+            
+            # For vision follow-ups, prioritize Gemini Vision's analysis for context
+            # This allows GPT-4o and Groq to use Gemini's findings to answer follow-up questions
+            # Priority: gemini-vision (for vision context) > gpt4 > gemini > groq
             primary_response = (
-                model_responses.get('gpt4-vision', '') or
+                model_responses.get('gemini-vision', '') or  # Prioritize Gemini Vision analysis
                 model_responses.get('gpt4', '') or
-                model_responses.get('gemini-vision', '') or
-                model_responses.get('gemini', '')
+                model_responses.get('gemini', '') or
+                model_responses.get('groq', '')
             )
+            
+            # Always include assistant response if available (even if empty, to maintain structure)
+            # This ensures conversation flow is preserved
             if primary_response:
+                # Check if response is a string (should be)
+                if isinstance(primary_response, str):
+                    messages.append({
+                        "role": "assistant",
+                        "content": primary_response
+                    })
+                else:
+                    # If it's a dict or other type, convert to string
+                    print(f"  ⚠️ Warning: Assistant response is not a string, converting: {type(primary_response)}")
+                    messages.append({
+                        "role": "assistant",
+                        "content": str(primary_response)
+                    })
+            else:
+                # If no response found, log warning but don't skip (maintains message order)
+                print(f"  ⚠️ Warning: Assistant message found but no model response available")
+                print(f"     Model responses dict: {model_responses}")
+                # Still add empty assistant message to maintain conversation structure
                 messages.append({
                     "role": "assistant",
-                    "content": primary_response
+                    "content": "[Previous response not available]"
                 })
 
     # Debug: Print final context
@@ -206,7 +241,7 @@ def format_vision_response(
 ) -> str:
     """
     Format vision model responses with annotated images
-    Now includes 3 models: GPT-4o Vision, Gemini Vision, and Groq (text response)
+    Handles both initial vision analysis and follow-up questions
 
     Args:
         responses: Dict mapping model names to response text strings
@@ -215,37 +250,89 @@ def format_vision_response(
     Returns:
         Formatted markdown string with images
     """
-    # Handle both dict and string responses
-    if isinstance(responses.get('gpt4-vision'), dict):
-        gpt4_text = responses.get('gpt4-vision', {}).get('response', 'No response')
-        gemini_text = responses.get('gemini-vision', {}).get('response', 'No response')
+    # Handle both dict and string responses (GPT-4o Vision removed)
+    if isinstance(responses.get('gemini-vision'), dict):
+        gemini_vision_text = responses.get('gemini-vision', {}).get('response', 'No response')
+        groq_vision_text = responses.get('groq-vision', {}).get('response', 'No response')
     else:
-        gpt4_text = responses.get('gpt4-vision', 'No response')
-        gemini_text = responses.get('gemini-vision', 'No response')
+        gemini_vision_text = responses.get('gemini-vision', 'No response')
+        groq_vision_text = responses.get('groq-vision', 'No response')
     
-    # Get Groq text response (if available)
-    groq_text = responses.get('groq', 'No response')
-
-    formatted = f"""### 🔍 Vision Analysis
+    # Check if we have text model responses (for follow-up questions)
+    gpt4_text = responses.get('gpt4', '')
+    groq_text = responses.get('groq', '')
+    
+    # Determine if this is a follow-up (has text models) or initial analysis (only vision models)
+    has_text_models = bool(gpt4_text or groq_text)
+    
+    if has_text_models:
+        # Follow-up question: Show Gemini Vision analysis + GPT-4o + Groq responses
+        formatted = f"""### 🔍 Follow-up Analysis (Based on Gemini Vision's Findings)
 
 <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px;">
 
-<div style="border: 2px solid #667eea; border-radius: 8px; padding: 12px;">
-<h4 style="margin-top: 0; color: #667eea;">🟢 GPT-4o Vision</h4>
-{gpt4_text}
-</div>
-
 <div style="border: 2px solid #4ECDC4; border-radius: 8px; padding: 12px;">
 <h4 style="margin-top: 0; color: #4ECDC4;">🔵 Gemini Vision</h4>
-{gemini_text}
+{gemini_vision_text if gemini_vision_text else 'Re-analyzing...'}
+</div>
+
+<div style="border: 2px solid #667eea; border-radius: 8px; padding: 12px;">
+<h4 style="margin-top: 0; color: #667eea;">🟢 GPT-4o</h4>
+{gpt4_text if gpt4_text else 'No response'}
 </div>
 
 <div style="border: 2px solid #FF6B6B; border-radius: 8px; padding: 12px;">
 <h4 style="margin-top: 0; color: #FF6B6B;">🟠 Groq Llama3</h4>
-{groq_text}
+{groq_text if groq_text else 'No response'}
 </div>
 
 </div>
+
+<p><em>💡 GPT-4o and Groq are answering based on Gemini Vision's analysis of the X-ray.</em></p>
+"""
+    else:
+        # Initial analysis: Gemini Vision (and Groq Vision if available)
+        # Check if Groq Vision is available or just showing unavailable message
+        groq_available = groq_vision_text and "not currently available" not in groq_vision_text.lower() and "not available" not in groq_vision_text.lower()
+        
+        if groq_available:
+            # Show both Gemini and Groq Vision
+            formatted = f"""### 🔍 Vision Analysis
+
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+
+<div style="border: 2px solid #4ECDC4; border-radius: 8px; padding: 12px;">
+<h4 style="margin-top: 0; color: #4ECDC4;">🔵 Gemini Vision</h4>
+{gemini_vision_text}
+</div>
+
+<div style="border: 2px solid #FF6B6B; border-radius: 8px; padding: 12px;">
+<h4 style="margin-top: 0; color: #FF6B6B;">🟠 Llama 3.2 Vision</h4>
+{groq_vision_text}
+</div>
+
+</div>
+"""
+        else:
+            # Only show Gemini Vision (Groq not available)
+            groq_message = ""
+            if groq_vision_text and ("not currently available" in groq_vision_text.lower() or "not available" in groq_vision_text.lower()):
+                # Parse the JSON message from Groq
+                try:
+                    import json
+                    groq_json = json.loads(groq_vision_text)
+                    groq_message = f'<p style="color: #888; font-style: italic; margin-top: 10px;">ℹ️ {groq_json.get("summary", groq_vision_text)}</p>'
+                except:
+                    groq_message = f'<p style="color: #888; font-style: italic; margin-top: 10px;">ℹ️ {groq_vision_text}</p>'
+            
+            formatted = f"""### 🔍 Vision Analysis
+
+<div style="border: 2px solid #4ECDC4; border-radius: 8px; padding: 12px;">
+<h4 style="margin-top: 0; color: #4ECDC4;">🔵 Gemini Vision</h4>
+{gemini_vision_text}
+</div>
+
+{groq_message}
 """
 
     # Add note about annotated images if they exist

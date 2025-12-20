@@ -1,9 +1,11 @@
 """
 API utility functions for vision and chat models
+FIXED VERSION - Correct Groq Vision model names
 """
 import os
 import base64
 import asyncio
+import json
 from io import BytesIO
 from typing import Dict, Tuple, Optional
 from openai import OpenAI
@@ -29,34 +31,38 @@ def encode_image_to_base64(image: Image.Image) -> str:
     return base64.b64encode(buffered.getvalue()).decode('utf-8')
 
 
-# ============ VISION API FUNCTIONS ============
+# ============ GROQ VISION MODELS (UPDATED) ============
+# As of Dec 2024, Groq supports these vision models:
+# - llama-3.2-11b-vision-preview (smaller, faster)
+# - llama-3.2-90b-vision-preview (larger, more accurate)
+# - meta-llama/llama-4-scout-17b-16e-instruct (newer Llama 4)
+# - meta-llama/llama-4-maverick-17b-128e-instruct (newer Llama 4)
 
-def analyze_xray_gpt4v(image: Image.Image, openai_client: OpenAI) -> Dict:
+GROQ_VISION_MODELS = [
+    "llama-3.2-11b-vision-preview",      # Most reliable for vision
+    "llama-3.2-90b-vision-preview",      # Larger but may have availability issues
+    "meta-llama/llama-4-scout-17b-16e-instruct",  # Llama 4 Scout
+]
+
+
+def analyze_xray_groq_vision(image: Image.Image, groq_client: Groq) -> Dict:
     """
-    Analyze dental X-ray using GPT-4V
+    Analyze dental X-ray using Groq Llama Vision
     Returns: dict with location info and coordinates
     """
     try:
         base64_image = encode_image_to_base64(image)
+        
+        vision_prompt = """[ACADEMIC RESEARCH PROJECT - EDUCATIONAL PURPOSES ONLY]
 
-        response = openai_client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": """[ACADEMIC RESEARCH PROJECT - EDUCATIONAL PURPOSES ONLY]
+This is a computer vision training exercise for an academic dental AI project. Analyze this sample dental X-ray image and identify wisdom teeth locations.
 
-This is a computer vision training exercise for an academic dental AI project. Analyze this sample dental X-ray image for educational demonstration purposes to identify wisdom teeth locations as a training example.
-
-For each wisdom tooth found in this training sample, provide:
+For each wisdom tooth found, provide:
 1. Position (upper-left, upper-right, lower-left, lower-right)
 2. Bounding box coordinates as percentages of image dimensions (x_min, y_min, x_max, y_max)
 3. Brief description of tooth condition
 
-Format your response as JSON:
+Your response MUST be valid JSON in this exact format:
 {
     "teeth_found": [
         {
@@ -68,47 +74,77 @@ Format your response as JSON:
     "summary": "Brief overall summary"
 }
 
-DISCLAIMER: This is for academic research and training purposes only. Not for clinical diagnosis.
+If no wisdom teeth are visible, return: {"teeth_found": [], "summary": "No wisdom teeth detected"}
 
-If no wisdom teeth are visible, return empty teeth_found list."""
-                        },
+IMPORTANT: Return ONLY the JSON object, no additional text or explanations."""
+
+        # Try each model in order until one works
+        last_error = None
+        for model_name in GROQ_VISION_MODELS:
+            try:
+                print(f"  🔄 Trying Groq vision model: {model_name}")
+                
+                response = groq_client.chat.completions.create(
+                    model=model_name,
+                    messages=[
                         {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/png;base64,{base64_image}"
-                            }
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": vision_prompt},
+                                {
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": f"data:image/png;base64,{base64_image}"
+                                    }
+                                }
+                            ]
                         }
-                    ]
+                    ],
+                    max_tokens=1000,
+                    temperature=0.3
+                )
+                
+                print(f"  ✅ Successfully used Groq model: {model_name}")
+                return {
+                    "success": True,
+                    "model": f"Groq Vision ({model_name})",
+                    "response": response.choices[0].message.content
                 }
-            ],
-            max_tokens=1000,
-            temperature=0.3
-        )
-
+                
+            except Exception as model_error:
+                print(f"  ⚠️ Model {model_name} failed: {str(model_error)[:100]}")
+                last_error = model_error
+                continue
+        
+        # All models failed
         return {
-            "success": True,
-            "model": "GPT-4o Vision",
-            "response": response.choices[0].message.content
+            "success": False,
+            "model": "Groq Vision",
+            "error": f"All Groq vision models failed. Last error: {str(last_error)}"
         }
 
     except Exception as e:
         import traceback
         error_details = traceback.format_exc()
-
+        
         print("=" * 60)
-        print("❌ ERROR in analyze_xray_gpt4v")
+        print("❌ ERROR in analyze_xray_groq_vision")
         print("=" * 60)
         print(f"Error: {type(e).__name__}: {str(e)}")
-        print(f"Has Image: {image is not None}")
         print("\nFull Traceback:")
         print(error_details)
         print("=" * 60)
-
+        
         return {
             "success": False,
-            "model": "GPT-4o Vision",
+            "model": "Groq Vision",
             "error": str(e)
         }
+
+
+# ============ VISION API FUNCTIONS ============
+# NOTE: GPT-4o Vision removed - refuses medical image analysis requests
+# Available vision models: Gemini Vision, Groq Llama Vision
 
 
 def analyze_xray_gemini(image: Image.Image) -> Dict:
@@ -117,7 +153,8 @@ def analyze_xray_gemini(image: Image.Image) -> Dict:
     Returns: dict with location info and coordinates
     """
     try:
-        model = genai.GenerativeModel('gemini-flash-latest')
+        # Use gemini-2.0-flash (current stable model as of Dec 2024)
+        model = genai.GenerativeModel('gemini-2.0-flash')
 
         prompt = """[ACADEMIC RESEARCH PROJECT - EDUCATIONAL PURPOSES ONLY]
 
@@ -177,7 +214,6 @@ If no wisdom teeth are visible, return empty teeth_found list."""
 async def chat_openai_async(query: str, openai_client: OpenAI) -> Dict:
     """Async chat with OpenAI GPT-4o"""
     try:
-        # Run sync OpenAI call in thread pool
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(
             None,
@@ -195,18 +231,6 @@ async def chat_openai_async(query: str, openai_client: OpenAI) -> Dict:
             "success": True
         }
     except Exception as e:
-        import traceback
-        error_details = traceback.format_exc()
-
-        print("=" * 60)
-        print("❌ ERROR in chat_openai_async")
-        print("=" * 60)
-        print(f"Error: {type(e).__name__}: {str(e)}")
-        print(f"Query: {query[:100]}..." if len(query) > 100 else f"Query: {query}")
-        print("\nFull Traceback:")
-        print(error_details)
-        print("=" * 60)
-
         return {
             "model": "OpenAI GPT-4o",
             "response": f"Error: {str(e)}",
@@ -220,7 +244,7 @@ async def chat_gemini_async(query: str) -> Dict:
         loop = asyncio.get_event_loop()
 
         def sync_gemini_call():
-            model = genai.GenerativeModel('gemini-flash-latest')
+            model = genai.GenerativeModel('gemini-2.0-flash')
             response = model.generate_content(query)
             return response.text
 
@@ -232,18 +256,6 @@ async def chat_gemini_async(query: str) -> Dict:
             "success": True
         }
     except Exception as e:
-        import traceback
-        error_details = traceback.format_exc()
-
-        print("=" * 60)
-        print("❌ ERROR in chat_gemini_async")
-        print("=" * 60)
-        print(f"Error: {type(e).__name__}: {str(e)}")
-        print(f"Query: {query[:100]}..." if len(query) > 100 else f"Query: {query}")
-        print("\nFull Traceback:")
-        print(error_details)
-        print("=" * 60)
-
         return {
             "model": "Google Gemini",
             "response": f"Error: {str(e)}",
@@ -271,18 +283,6 @@ async def chat_groq_async(query: str, groq_client: Groq) -> Dict:
             "success": True
         }
     except Exception as e:
-        import traceback
-        error_details = traceback.format_exc()
-
-        print("=" * 60)
-        print("❌ ERROR in chat_groq_async")
-        print("=" * 60)
-        print(f"Error: {type(e).__name__}: {str(e)}")
-        print(f"Query: {query[:100]}..." if len(query) > 100 else f"Query: {query}")
-        print("\nFull Traceback:")
-        print(error_details)
-        print("=" * 60)
-
         return {
             "model": "Groq Llama3",
             "response": f"Error: {str(e)}",
@@ -303,7 +303,6 @@ async def chat_all_models(query: str, openai_client: OpenAI, groq_client: Groq) 
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    # Handle any exceptions
     processed_results = []
     for i, result in enumerate(results):
         if isinstance(result, Exception):
@@ -318,6 +317,7 @@ async def chat_all_models(query: str, openai_client: OpenAI, groq_client: Groq) 
 
     return tuple(processed_results)
 
+
 # ============ CONTEXT-AWARE CHAT FUNCTIONS (FOR UNIFIED CHATBOT) ============
 
 async def chat_with_context_async(
@@ -328,47 +328,24 @@ async def chat_with_context_async(
 ) -> Dict:
     """
     Chat with conversation context for any model
-
-    Args:
-        messages: List of conversation messages with role/content (may include image fields to filter)
-        model_name: "gpt4", "gemini", or "groq"
-        openai_client: OpenAI client instance
-        groq_client: Groq client instance
-
-    Returns:
-        Dict with model response
     """
     try:
         loop = asyncio.get_event_loop()
 
         # Clean messages - remove image fields for text-only models
-        # Also ensure content is always a string, not dict or other type
         clean_messages = []
         for msg in messages:
-            # Make sure we have role and content
             if "role" not in msg or "content" not in msg:
                 continue
-
-            # Extract content as string
             content = msg["content"]
             if isinstance(content, dict):
-                # If content is a dict, extract text part
                 content = str(content)
             elif not isinstance(content, str):
                 content = str(content)
-
-            clean_msg = {
-                "role": msg["role"],
-                "content": content
-            }
+            clean_msg = {"role": msg["role"], "content": content}
             clean_messages.append(clean_msg)
 
         if model_name == "gpt4":
-            # Debug: Print message structure
-            print(f"[DEBUG] Sending {len(clean_messages)} messages to GPT-4")
-            for i, msg in enumerate(clean_messages):
-                print(f"  [{i}] role={msg['role']}, content_type={type(msg['content'])}, preview={str(msg['content'])[:60]}")
-
             response = await loop.run_in_executor(
                 None,
                 lambda: openai_client.chat.completions.create(
@@ -385,59 +362,27 @@ async def chat_with_context_async(
             }
         
         elif model_name == "gemini":
-            def sync_gemini_context_call():
-                model = genai.GenerativeModel('gemini-flash-latest')
-
-                # Convert messages to Gemini format
-                # Include system prompt in the first user message if present
-                chat_history = []
-                system_prompt = None
-                
-                # Extract system prompt if present
-                if clean_messages and clean_messages[0].get("role") == "system":
-                    system_prompt = clean_messages[0].get("content", "")
-                    messages_to_process = clean_messages[1:]
-                else:
-                    messages_to_process = clean_messages
-                
-                # Build chat history from all messages
-                for msg in messages_to_process:
-                    role = "user" if msg["role"] == "user" else "model"
-                    content = msg["content"]
-                    
-                    # If this is the first user message and we have a system prompt, combine them
-                    if role == "user" and system_prompt and len(chat_history) == 0:
-                        combined_content = f"{system_prompt}\n\n{content}"
-                        chat_history.append({"role": role, "parts": [combined_content]})
-                    else:
-                        chat_history.append({"role": role, "parts": [content]})
-
-                # Debug: Print chat history length
-                print(f"[GEMINI DEBUG] Chat history has {len(chat_history)} messages")
-                if len(chat_history) > 0:
-                    print(f"  First message preview: {str(chat_history[0]['parts'][0])[:100]}...")
-                    if len(chat_history) > 1:
-                        print(f"  Last message preview: {str(chat_history[-1]['parts'][0])[:100]}...")
-
-                # Start chat with history (excluding last message)
-                if len(chat_history) > 1:
-                    # Use all messages except the last one as history
-                    history_for_chat = chat_history[:-1]
-                    chat = model.start_chat(history=history_for_chat)
-                    response = chat.send_message(chat_history[-1]["parts"][0])
-                else:
-                    # First message (or only message)
-                    response = model.generate_content(chat_history[0]["parts"][0])
-
+            def sync_gemini():
+                model = genai.GenerativeModel('gemini-2.0-flash')
+                prompt_parts = []
+                for msg in clean_messages:
+                    if msg['role'] == 'system':
+                        prompt_parts.append(f"System: {msg['content']}")
+                    elif msg['role'] == 'user':
+                        prompt_parts.append(f"User: {msg['content']}")
+                    elif msg['role'] == 'assistant':
+                        prompt_parts.append(f"Assistant: {msg['content']}")
+                full_prompt = "\n".join(prompt_parts)
+                response = model.generate_content(full_prompt)
                 return response.text
 
-            response_text = await loop.run_in_executor(None, sync_gemini_context_call)
+            response_text = await loop.run_in_executor(None, sync_gemini)
             return {
                 "model": "gemini",
                 "response": response_text,
                 "success": True
             }
-
+        
         elif model_name == "groq":
             response = await loop.run_in_executor(
                 None,
@@ -453,21 +398,8 @@ async def chat_with_context_async(
                 "response": response.choices[0].message.content,
                 "success": True
             }
-        
+
     except Exception as e:
-        import traceback
-        error_details = traceback.format_exc()
-
-        # Log error details
-        print("=" * 60)
-        print(f"❌ ERROR in chat_with_context_async ({model_name})")
-        print("=" * 60)
-        print(f"Error: {type(e).__name__}: {str(e)}")
-        print(f"Messages count: {len(messages) if messages else 0}")
-        print("\nFull Traceback:")
-        print(error_details)
-        print("=" * 60)
-
         return {
             "model": model_name,
             "response": f"Error: {str(e)}",
@@ -475,90 +407,32 @@ async def chat_with_context_async(
         }
 
 
+# ============ VISION WITH CONTEXT (FOR UNIFIED CHATBOT) ============
+
 async def vision_with_context_async(
     messages: list,
     image: Image.Image,
     model_name: str,
-    openai_client: OpenAI = None
+    openai_client: OpenAI = None,
+    groq_client: Groq = None
 ) -> Dict:
     """
     Vision analysis with conversation context
-
-    Args:
-        messages: Conversation history (may include PIL Images that need conversion)
-        image: PIL Image to analyze (current image)
-        model_name: "gpt4-vision" or "gemini-vision"
-        openai_client: OpenAI client
-
-    Returns:
-        Dict with vision analysis
     """
     try:
         loop = asyncio.get_event_loop()
-
-        if model_name == "gpt4-vision":
-            # Convert PIL Images in context to base64
-            vision_messages = []
-            for msg in messages:
-                if msg['role'] == 'system':
-                    vision_messages.append(msg)
-                elif msg['role'] == 'user':
-                    # Check if this message has an image
-                    if msg.get('image') and isinstance(msg['image'], Image.Image):
-                        # Convert to vision message format
-                        base64_img = encode_image_to_base64(msg['image'])
-                        vision_messages.append({
-                            "role": "user",
-                            "content": [
-                                {"type": "text", "text": msg['content']},
-                                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{base64_img}"}}
-                            ]
-                        })
-                    else:
-                        # Text-only message
-                        vision_messages.append({"role": "user", "content": msg['content']})
-                elif msg['role'] == 'assistant':
-                    vision_messages.append(msg)
-
-            # Add current image if provided
-            if image:
-                base64_image = encode_image_to_base64(image)
-                # The last message should be the user's current message
-                # We need to replace or append the image to it
-                if vision_messages and vision_messages[-1]['role'] == 'user':
-                    # Update last user message to include image
-                    last_msg = vision_messages[-1]
-                    if isinstance(last_msg['content'], str):
-                        vision_messages[-1] = {
-                            "role": "user",
-                            "content": [
-                                {"type": "text", "text": last_msg['content']},
-                                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{base64_image}"}}
-                            ]
-                        }
-
-            response = await loop.run_in_executor(
-                None,
-                lambda: openai_client.chat.completions.create(
-                    model="gpt-4o",
-                    messages=vision_messages,
-                    max_tokens=1000,
-                    temperature=0.3
-                )
-            )
-
+        
+        if image is None:
             return {
-                "model": "gpt4-vision",
-                "response": response.choices[0].message.content,
-                "success": True
+                "model": model_name,
+                "response": "No image provided for vision analysis",
+                "success": False
             }
 
-        elif model_name == "gemini-vision":
+        if model_name == "gemini-vision":
             def sync_gemini_vision():
-                # Use gemini-flash-latest for vision tasks
-                model = genai.GenerativeModel('gemini-flash-latest')
-
-                # Build prompt from conversation context
+                model = genai.GenerativeModel('gemini-2.0-flash')
+                
                 prompt_parts = []
                 for msg in messages:
                     if msg['role'] == 'user':
@@ -566,7 +440,6 @@ async def vision_with_context_async(
                     elif msg['role'] == 'assistant':
                         prompt_parts.append(f"Assistant: {msg['content']}")
 
-                # Add current message with explicit bounding box request
                 prompt = "\n".join(prompt_parts) + """
 
 [ACADEMIC RESEARCH - EDUCATIONAL SAMPLE]
@@ -593,7 +466,6 @@ Format your response as JSON:
 This is for academic research only, not clinical diagnosis.
 If no wisdom teeth are visible, return empty teeth_found list."""
 
-                # Gemini accepts PIL Image directly
                 response = model.generate_content([prompt, image])
                 return response.text
 
@@ -604,27 +476,94 @@ If no wisdom teeth are visible, return empty teeth_found list."""
                 "success": True
             }
 
+        elif model_name == "groq-vision":
+            def sync_groq_vision():
+                base64_image = encode_image_to_base64(image)
+                
+                user_message = messages[-1]['content'] if messages and messages[-1].get('role') == 'user' else 'Analyze this dental X-ray'
+                
+                vision_prompt = f"""{user_message}
+
+[ACADEMIC RESEARCH PROJECT - EDUCATIONAL PURPOSES ONLY]
+
+Analyze this dental X-ray image and identify wisdom teeth locations.
+
+For each wisdom tooth found, provide:
+1. Position (upper-left, upper-right, lower-left, lower-right)
+2. Bounding box coordinates as percentages (x_min, y_min, x_max, y_max)
+3. Brief description of tooth condition
+
+Your response MUST be valid JSON:
+{{
+    "teeth_found": [
+        {{
+            "position": "lower-right",
+            "bbox": [0.6, 0.7, 0.85, 0.95],
+            "description": "Impacted wisdom tooth"
+        }}
+    ],
+    "summary": "Brief overall summary"
+}}
+
+If no wisdom teeth visible: {{"teeth_found": [], "summary": "No wisdom teeth detected"}}
+
+Return ONLY the JSON object."""
+
+                # Try each vision model
+                for model_id in GROQ_VISION_MODELS:
+                    try:
+                        print(f"  🔄 Trying Groq vision: {model_id}")
+                        response = groq_client.chat.completions.create(
+                            model=model_id,
+                            messages=[
+                                {
+                                    "role": "user",
+                                    "content": [
+                                        {"type": "text", "text": vision_prompt},
+                                        {
+                                            "type": "image_url",
+                                            "image_url": {
+                                                "url": f"data:image/png;base64,{base64_image}"
+                                            }
+                                        }
+                                    ]
+                                }
+                            ],
+                            max_tokens=1000,
+                            temperature=0.3
+                        )
+                        print(f"  ✅ Success with: {model_id}")
+                        return response.choices[0].message.content
+                    except Exception as e:
+                        print(f"  ⚠️ {model_id} failed: {str(e)[:80]}")
+                        continue
+                
+                # All failed - return error message as JSON
+                return json.dumps({
+                    "teeth_found": [],
+                    "summary": "Groq vision models unavailable. Please use Gemini Vision instead."
+                })
+
+            response_text = await loop.run_in_executor(None, sync_groq_vision)
+            return {
+                "model": "groq-vision",
+                "response": response_text,
+                "success": True
+            }
+
     except Exception as e:
         import traceback
-        error_details = traceback.format_exc()
-
-        # Log error details
-        print("=" * 60)
-        print(f"❌ ERROR in vision_with_context_async ({model_name})")
-        print("=" * 60)
-        print(f"Error: {type(e).__name__}: {str(e)}")
-        print(f"Has Image: {image is not None}")
-        print(f"Messages count: {len(messages) if messages else 0}")
-        print("\nFull Traceback:")
-        print(error_details)
-        print("=" * 60)
-
+        print(f"❌ ERROR in vision_with_context_async: {str(e)}")
+        traceback.print_exc()
+        
         return {
             "model": model_name,
             "response": f"Error: {str(e)}",
             "success": False
         }
 
+
+# ============ UNIFIED MULTIMODAL CHAT ============
 
 async def multimodal_chat_async(
     message: str,
@@ -636,32 +575,19 @@ async def multimodal_chat_async(
 ) -> Dict:
     """
     Unified multimodal chat - handles both text and vision
-
-    Args:
-        message: User's text message (for reference, already in conversation_context)
-        image: Optional image upload (current image for vision models)
-        conversation_context: Full conversation history (already includes current message)
-        models: List of model names to query
-        openai_client: OpenAI client
-        groq_client: Groq client
-
-    Returns:
-        Dict mapping model names to responses
     """
     tasks = []
     
     for model in models:
-        if model in ["gpt4-vision", "gemini-vision"]:
-            # Vision models
+        if model in ["gemini-vision", "groq-vision"]:
             tasks.append(vision_with_context_async(
                 conversation_context,
                 image,
                 model,
-                openai_client
+                openai_client,
+                groq_client
             ))
         else:
-            # Text chat models
-            # conversation_context already includes the current message (added in dental_ai_unified.py)
             tasks.append(chat_with_context_async(
                 conversation_context,
                 model,
@@ -671,7 +597,6 @@ async def multimodal_chat_async(
     
     results = await asyncio.gather(*tasks, return_exceptions=True)
     
-    # Process results
     response_dict = {}
     for i, result in enumerate(results):
         if isinstance(result, Exception):

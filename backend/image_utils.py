@@ -5,7 +5,7 @@ import json
 import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 
 
 def parse_vision_response(response_text: str) -> Dict:
@@ -174,6 +174,36 @@ def create_side_by_side_comparison(original: Image.Image, annotated: Image.Image
     draw.text((original.size[0] + 30, 10), "AI Analysis", fill="white", font=font)
 
     return combined
+
+
+def resize_image_for_chat(image: Image.Image, max_width: int = 500, max_height: int = 400) -> Image.Image:
+    """
+    Resize image to fit in chat display while maintaining aspect ratio
+    
+    Args:
+        image: PIL Image to resize
+        max_width: Maximum width in pixels (default: 500 - reduced for better chat display)
+        max_height: Maximum height in pixels (default: 400 - reduced for better chat display)
+    
+    Returns:
+        Resized PIL Image
+    """
+    width, height = image.size
+    
+    # Calculate scaling factor to fit within max dimensions
+    width_ratio = max_width / width
+    height_ratio = max_height / height
+    scale = min(width_ratio, height_ratio, 1.0)  # Don't upscale
+    
+    # Only resize if image is larger than max dimensions
+    if scale < 1.0:
+        new_width = int(width * scale)
+        new_height = int(height * scale)
+        resized = image.resize((new_width, new_height), Image.LANCZOS)
+        print(f"  📐 Resized image from {width}x{height} to {new_width}x{new_height} for chat display")
+        return resized
+    
+    return image
 
 
 def add_summary_overlay(image: Image.Image, summary_text: str) -> Image.Image:

@@ -110,16 +110,26 @@ def process_chat_message(
         loop.close()
 
         # Handle vision responses differently (with image annotations)
+        # For vision-followup: Gemini Vision analyzes, then GPT-4o and Groq use that analysis
         if mode in ["vision", "vision-followup"]:
             # Parse vision responses and draw bounding boxes
             annotated_images = {}
             annotated_list = []
 
+            # Process vision model responses for annotations
             for model_name, response_text in responses.items():
-                if model_name in ["gpt4-vision", "gemini-vision"]:
+                if model_name in ["gemini-vision", "groq-vision"]:
                     # Debug logging
                     print(f"\n[VISION DEBUG] {model_name} response preview:")
                     print(f"  {response_text[:200]}...")
+                    
+                    # Check if Groq Vision is not available
+                    if model_name == "groq-vision" and ("not currently available" in response_text.lower() or 
+                                                         "not available" in response_text.lower() or
+                                                         "not supported" in response_text.lower()):
+                        print(f"  ⚠️ Groq Vision is not available - Groq may not support vision models yet")
+                        # Continue to show the message in the UI, but don't try to parse/annotate
+                        continue
 
                     # Try to parse structured response
                     parsed = parse_vision_response(response_text)
@@ -138,8 +148,14 @@ def process_chat_message(
                             annotated = draw_bounding_boxes(current_image, teeth)
                             annotated_images[model_name] = annotated
                             # Add to list for inline display with label
-                            model_label = "GPT-4o Vision" if "gpt4" in model_name else "Gemini Vision"
+                            if "groq" in model_name:
+                                model_label = "Llama 3.2 Vision"
+                            else:
+                                model_label = "Gemini Vision"
                             annotated_list.append((annotated, model_label))
+                
+                # For vision-followup mode, GPT-4o and Groq responses are handled in formatting
+                # They don't need image annotation, just text responses using Gemini's analysis
 
             # Format vision response with annotated images
             from multimodal_utils import format_vision_response
@@ -158,7 +174,10 @@ def process_chat_message(
             user_message_content = message
             if image:
                 # User uploaded image - include it in chat using dictionary format
-                history.append({"role": "user", "content": user_message_content, "files": [image]})
+                # Resize image for chat display to prevent oversized images
+                from image_utils import resize_image_for_chat
+                resized_user_image = resize_image_for_chat(image, max_width=500, max_height=400)
+                history.append({"role": "user", "content": user_message_content, "files": [resized_user_image]})
             else:
                 history.append({"role": "user", "content": user_message_content})
             
@@ -170,14 +189,20 @@ def process_chat_message(
                 # For Gradio Chatbot, show the first annotated image inline (with bounding boxes)
                 # All annotated images are also available in the gallery below
                 first_image = annotated_list[0][0]  # Get first annotated image (with bounding boxes)
-                history.append({"role": "assistant", "content": assistant_content, "files": [first_image]})
+                # Resize image for chat display (max 500px width, 400px height)
+                from image_utils import resize_image_for_chat
+                resized_image = resize_image_for_chat(first_image, max_width=500, max_height=400)
+                history.append({"role": "assistant", "content": assistant_content, "files": [resized_image]})
                 # Return gallery with all annotated images for full view
                 print(f"  ✅ Displaying {len(annotated_list)} annotated image(s) with bounding boxes")
                 return history, "", None, annotated_list, gr.update(visible=True), conversation_state
             else:
                 # No teeth detected or parsing failed - still show original image for reference
                 if current_image:
-                    history.append({"role": "assistant", "content": assistant_content, "files": [current_image]})
+                    # Resize image for chat display
+                    from image_utils import resize_image_for_chat
+                    resized_image = resize_image_for_chat(current_image, max_width=500, max_height=400)
+                    history.append({"role": "assistant", "content": assistant_content, "files": [resized_image]})
                     print(f"  ⚠️ No wisdom teeth detected - showing original image")
                 else:
                     history.append({"role": "assistant", "content": assistant_content})
@@ -262,6 +287,26 @@ custom_css = """
     padding: 10px;
 }
 
+/* Constrain images in chat to prevent oversized display */
+.chat-container img,
+.message img,
+[class*="message"] img,
+[class*="chat"] img {
+    max-width: 500px !important;
+    max-height: 400px !important;
+    width: auto !important;
+    height: auto !important;
+    object-fit: contain !important;
+    border-radius: 8px;
+    margin: 5px 0;
+}
+
+/* Ensure chat messages don't overflow */
+.message {
+    max-width: 100% !important;
+    overflow: hidden !important;
+}
+
 .model-response-grid {
     display: grid;
     grid-template-columns: 1fr 1fr 1fr;
@@ -305,9 +350,11 @@ with gr.Blocks(title="Dental AI Platform") as demo:
             - 🔄 Have follow-up conversations with context ✨ **NEW: Phase 3**
 
             **Available Models:**
-            - 🟢 GPT-4o (OpenAI) - Most capable reasoning
+            - 🟢 GPT-4o (OpenAI) - Most capable reasoning (text only)
             - 🔵 Gemini (Google) - Fast and efficient
-            - 🟠 Groq Llama3 - Ultra-fast inference
+            - 🔵 Gemini Vision - X-ray analysis and vision tasks
+            - 🟠 Groq Llama3 - Ultra-fast inference (text only)
+            - 🟠 Llama 3.2 Vision (Groq) - Vision analysis (may not be available)
             """)
 
             # Conversation state (hidden from user, tracks full context)
