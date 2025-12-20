@@ -35,3 +35,7 @@ Requirements:
 -   Keep code modular (separate files for api calls if needed)
 
 Start with a working skeleton I can build upon.
+
+**Prompt**: Create relevant documentation of features, architecture and readme
+
+# 20 December 2025
