@@ -80,17 +80,26 @@ def process_chat_message(
         # Determine which models to use (now checks conversation_state for recent images)
         mode, models = route_message(message, image, conversation_state)
 
+        # Always find the most recent X-ray image to include in API calls
+        current_image = image
+        if not current_image:
+            # Find most recent image in conversation history
+            for entry in reversed(conversation_state):
+                if entry.get("role") == "user" and entry.get("image"):
+                    current_image = entry["image"]
+                    break
+
         # Build conversation context from state
         context = build_conversation_context(conversation_state, max_turns=5)
 
-        # Call models (async)
+        # Call models (async) - always pass the most recent image
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
         responses = loop.run_until_complete(
             multimodal_chat_async(
                 message=message,
-                image=image,
+                image=current_image,  # Always use most recent image
                 conversation_context=context,
                 models=models,
                 openai_client=openai_client,
@@ -102,31 +111,33 @@ def process_chat_message(
 
         # Handle vision responses differently (with image annotations)
         if mode in ["vision", "vision-followup"]:
-            # For vision-followup, retrieve the most recent image from conversation state
-            current_image = image
-            if mode == "vision-followup" and not current_image:
-                # Find most recent image in conversation history
-                for entry in reversed(conversation_state[:-1]):  # Exclude current message
-                    if entry.get("role") == "user" and entry.get("image"):
-                        current_image = entry["image"]
-                        break
-
             # Parse vision responses and draw bounding boxes
             annotated_images = {}
             annotated_list = []
 
             for model_name, response_text in responses.items():
                 if model_name in ["gpt4-vision", "gemini-vision"]:
+                    # Debug logging
+                    print(f"\n[VISION DEBUG] {model_name} response preview:")
+                    print(f"  {response_text[:200]}...")
+
                     # Try to parse structured response
                     parsed = parse_vision_response(response_text)
+
+                    # Debug logging
+                    if parsed.get('error'):
+                        print(f"  ❌ Parse error: {parsed.get('error')}")
+                    else:
+                        print(f"  ✅ Parsed successfully, found {len(parsed.get('teeth_found', []))} teeth")
 
                     # If teeth were detected with bounding boxes, draw them
                     if parsed.get('teeth_found') and not parsed.get('error') and current_image:
                         teeth = parsed.get('teeth_found', [])
-                        if teeth and isinstance(teeth, list):
+                        if teeth and isinstance(teeth, list) and len(teeth) > 0:
+                            print(f"  🎨 Drawing {len(teeth)} bounding boxes")
                             annotated = draw_bounding_boxes(current_image, teeth)
                             annotated_images[model_name] = annotated
-                            # Add to list for gallery with label
+                            # Add to list for inline display with label
                             model_label = "GPT-4o Vision" if "gpt4" in model_name else "Gemini Vision"
                             annotated_list.append((annotated, model_label))
 
@@ -142,14 +153,34 @@ def process_chat_message(
             }
             conversation_state.append(assistant_entry)
 
-            # Update display history - use dictionary format for Gradio
-            history.append({"role": "user", "content": message})
-            history.append({"role": "assistant", "content": formatted_response})
-
-            # Show gallery if we have annotated images
-            if annotated_list:
+            # Update display history - include images inline in chat
+            # Format user message with image if uploaded (dictionary format for Gradio)
+            user_message_content = message
+            if image:
+                # User uploaded image - include it in chat using dictionary format
+                history.append({"role": "user", "content": user_message_content, "files": [image]})
+            else:
+                history.append({"role": "user", "content": user_message_content})
+            
+            # Assistant response with annotated images inline
+            assistant_content = formatted_response
+            # Include annotated images in the assistant message
+            if annotated_list and len(annotated_list) > 0:
+                # Show annotated images with bounding boxes in chat
+                # For Gradio Chatbot, show the first annotated image inline (with bounding boxes)
+                # All annotated images are also available in the gallery below
+                first_image = annotated_list[0][0]  # Get first annotated image (with bounding boxes)
+                history.append({"role": "assistant", "content": assistant_content, "files": [first_image]})
+                # Return gallery with all annotated images for full view
+                print(f"  ✅ Displaying {len(annotated_list)} annotated image(s) with bounding boxes")
                 return history, "", None, annotated_list, gr.update(visible=True), conversation_state
             else:
+                # No teeth detected or parsing failed - still show original image for reference
+                if current_image:
+                    history.append({"role": "assistant", "content": assistant_content, "files": [current_image]})
+                    print(f"  ⚠️ No wisdom teeth detected - showing original image")
+                else:
+                    history.append({"role": "assistant", "content": assistant_content})
                 return history, "", None, [], gr.update(visible=False), conversation_state
         else:
             # Text-only responses - use standard formatting
@@ -163,7 +194,7 @@ def process_chat_message(
             }
             conversation_state.append(assistant_entry)
 
-            # Update display history - use dictionary format for Gradio
+            # Update display history - use dictionary format for Gradio Chatbot
             history.append({"role": "user", "content": message})
             history.append({"role": "assistant", "content": formatted_response})
             return history, "", None, [], gr.update(visible=False), conversation_state

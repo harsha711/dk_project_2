@@ -8,7 +8,7 @@ import re
 
 
 # System prompt for wisdom teeth specialist
-SYSTEM_PROMPT = """You are a specialized dental AI assistant focused on wisdom teeth (third molars).
+SYSTEM_PROMPT = """You are a dental assistant specializing in wisdom teeth. You can analyze dental X-rays and answer follow-up questions about them. Stay focused on wisdom teeth topics.
 
 Your expertise includes:
 - Wisdom tooth anatomy, development, and eruption patterns
@@ -18,14 +18,12 @@ Your expertise includes:
 - Post-operative care and recovery
 
 Guidelines:
-- Answer ONLY wisdom teeth related questions
+- Provide clear, helpful information about wisdom teeth
 - Be specific about tooth positions (e.g., "upper right third molar #1", "lower left #17")
 - When analyzing X-rays, describe: position, impaction angle, root formation, proximity to nerves
-- For other dental topics, politely redirect: "I specialize in wisdom teeth. Please consult a general dentist for that concern."
-- For medical emergencies (severe pain, infection, bleeding), advise seeking immediate care
-- Base responses on clinical evidence when possible
+- Focus on wisdom teeth topics and stay on-topic
 
-Remember: You assist with information only. All clinical decisions should be made by licensed dental professionals."""
+IMPORTANT DISCLAIMER: This is for educational and informational purposes only. Not for clinical diagnosis. Real medical decisions must be made by licensed dental professionals."""
 
 
 def route_message(
@@ -60,11 +58,11 @@ def route_message(
         mentions_image = any(ref in message.lower() for ref in image_refs)
 
         if has_image:
-            # User uploaded new image - use vision models
-            mode, models = "vision", ["gpt4-vision", "gemini-vision"]
+            # User uploaded new image - use vision models + Groq for text response
+            mode, models = "vision", ["gpt4-vision", "gemini-vision", "groq"]
         elif has_recent_image and mentions_image:
-            # Follow-up question about previous image
-            mode, models = "vision-followup", ["gpt4-vision", "gemini-vision"]
+            # Follow-up question about previous image - use vision models + Groq
+            mode, models = "vision-followup", ["gpt4-vision", "gemini-vision", "groq"]
         else:
             # Text-only question - use all chat models
             mode, models = "chat", ["gpt4", "gemini", "groq"]
@@ -108,7 +106,21 @@ def build_conversation_context(
         })
 
     # Get recent history (last N user-assistant pairs)
-    recent_history = history[-(max_turns * 2):] if history else []
+    # Include all messages up to max_turns pairs (user + assistant = 2 messages per turn)
+    # Always include the last message even if it's unpaired (user message without assistant response)
+    if history:
+        # Get last max_turns * 2 messages, but ensure we include the very last message
+        # This handles cases where the current user message hasn't been responded to yet
+        recent_history = history[-(max_turns * 2):] if len(history) > max_turns * 2 else history
+    else:
+        recent_history = []
+
+    # Debug: Print context building info
+    print(f"[CONTEXT DEBUG] Building context from {len(history)} total messages")
+    print(f"  Recent history: {len(recent_history)} messages")
+    if recent_history:
+        print(f"  First message: role={recent_history[0].get('role')}, preview={str(recent_history[0].get('content', ''))[:60]}...")
+        print(f"  Last message: role={recent_history[-1].get('role')}, preview={str(recent_history[-1].get('content', ''))[:60]}...")
 
     for msg in recent_history:
         if msg['role'] == 'user':
@@ -135,6 +147,14 @@ def build_conversation_context(
                     "role": "assistant",
                     "content": primary_response
                 })
+
+    # Debug: Print final context
+    print(f"  Final context has {len(messages)} messages (including system prompt)")
+    for i, msg in enumerate(messages):
+        if msg.get('role') == 'system':
+            print(f"    [{i}] SYSTEM: {str(msg.get('content', ''))[:60]}...")
+        else:
+            print(f"    [{i}] {msg.get('role', 'unknown').upper()}: {str(msg.get('content', ''))[:60]}...")
 
     return messages
 
@@ -186,6 +206,7 @@ def format_vision_response(
 ) -> str:
     """
     Format vision model responses with annotated images
+    Now includes 3 models: GPT-4o Vision, Gemini Vision, and Groq (text response)
 
     Args:
         responses: Dict mapping model names to response text strings
@@ -201,10 +222,13 @@ def format_vision_response(
     else:
         gpt4_text = responses.get('gpt4-vision', 'No response')
         gemini_text = responses.get('gemini-vision', 'No response')
+    
+    # Get Groq text response (if available)
+    groq_text = responses.get('groq', 'No response')
 
     formatted = f"""### 🔍 Vision Analysis
 
-<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+<div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px;">
 
 <div style="border: 2px solid #667eea; border-radius: 8px; padding: 12px;">
 <h4 style="margin-top: 0; color: #667eea;">🟢 GPT-4o Vision</h4>
@@ -214,6 +238,11 @@ def format_vision_response(
 <div style="border: 2px solid #4ECDC4; border-radius: 8px; padding: 12px;">
 <h4 style="margin-top: 0; color: #4ECDC4;">🔵 Gemini Vision</h4>
 {gemini_text}
+</div>
+
+<div style="border: 2px solid #FF6B6B; border-radius: 8px; padding: 12px;">
+<h4 style="margin-top: 0; color: #FF6B6B;">🟠 Groq Llama3</h4>
+{groq_text}
 </div>
 
 </div>

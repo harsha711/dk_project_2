@@ -24,15 +24,30 @@ def parse_vision_response(response_text: str) -> Dict:
             end = response_text.find("```", start)
             json_str = response_text[start:end].strip()
         else:
-            json_str = response_text.strip()
+            # Try to find JSON object in the response
+            # Look for { ... } pattern
+            json_start = response_text.find('{')
+            json_end = response_text.rfind('}')
+
+            if json_start != -1 and json_end != -1 and json_end > json_start:
+                json_str = response_text[json_start:json_end + 1].strip()
+            else:
+                json_str = response_text.strip()
 
         parsed = json.loads(json_str)
+
+        # Log what was parsed
+        print(f"[PARSE DEBUG] Successfully parsed JSON with {len(parsed.get('teeth_found', []))} teeth")
+
         return parsed
 
     except json.JSONDecodeError as e:
+        print(f"[PARSE ERROR] Failed to parse JSON: {str(e)}")
+        print(f"[PARSE ERROR] Response preview: {response_text[:300]}...")
         return {
             "error": f"Failed to parse JSON: {str(e)}",
-            "raw_response": response_text
+            "raw_response": response_text,
+            "teeth_found": []  # Return empty list to prevent errors downstream
         }
 
 
@@ -84,11 +99,18 @@ def draw_bounding_boxes(image: Image.Image, detections: List[Dict]) -> Image.Ima
         # Get color for this position
         color = color_map.get(position.lower(), "#FF0000")
 
-        # Draw rectangle
+        # Draw rectangle with thick outline for better visibility
+        # Draw outer rectangle first (slightly larger) for better visibility
+        draw.rectangle(
+            [(x_min - 1, y_min - 1), (x_max + 1, y_max + 1)],
+            outline=(0, 0, 0),  # Black outline for contrast
+            width=2
+        )
+        # Draw main colored rectangle
         draw.rectangle(
             [(x_min, y_min), (x_max, y_max)],
             outline=color,
-            width=4
+            width=5  # Thick outline for clear visibility
         )
 
         # Draw label background

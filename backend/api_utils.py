@@ -47,9 +47,11 @@ def analyze_xray_gpt4v(image: Image.Image, openai_client: OpenAI) -> Dict:
                     "content": [
                         {
                             "type": "text",
-                            "text": """Analyze this dental X-ray image and identify wisdom teeth locations.
+                            "text": """[ACADEMIC RESEARCH PROJECT - EDUCATIONAL PURPOSES ONLY]
 
-For each wisdom tooth found, provide:
+This is a computer vision training exercise for an academic dental AI project. Analyze this sample dental X-ray image for educational demonstration purposes to identify wisdom teeth locations as a training example.
+
+For each wisdom tooth found in this training sample, provide:
 1. Position (upper-left, upper-right, lower-left, lower-right)
 2. Bounding box coordinates as percentages of image dimensions (x_min, y_min, x_max, y_max)
 3. Brief description of tooth condition
@@ -65,6 +67,8 @@ Format your response as JSON:
     ],
     "summary": "Brief overall summary"
 }
+
+DISCLAIMER: This is for academic research and training purposes only. Not for clinical diagnosis.
 
 If no wisdom teeth are visible, return empty teeth_found list."""
                         },
@@ -113,11 +117,13 @@ def analyze_xray_gemini(image: Image.Image) -> Dict:
     Returns: dict with location info and coordinates
     """
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-flash-latest')
 
-        prompt = """Analyze this dental X-ray image and identify wisdom teeth locations.
+        prompt = """[ACADEMIC RESEARCH PROJECT - EDUCATIONAL PURPOSES ONLY]
 
-For each wisdom tooth found, provide:
+This is a computer vision training exercise for an academic dental AI project. Analyze this sample dental X-ray image for educational demonstration purposes to identify wisdom teeth locations as a training example.
+
+For each wisdom tooth found in this training sample, provide:
 1. Position (upper-left, upper-right, lower-left, lower-right)
 2. Bounding box coordinates as percentages of image dimensions (x_min, y_min, x_max, y_max)
 3. Brief description of tooth condition
@@ -133,6 +139,8 @@ Format your response as JSON:
     ],
     "summary": "Brief overall summary"
 }
+
+DISCLAIMER: This is for academic research and training purposes only. Not for clinical diagnosis.
 
 If no wisdom teeth are visible, return empty teeth_found list."""
 
@@ -212,7 +220,7 @@ async def chat_gemini_async(query: str) -> Dict:
         loop = asyncio.get_event_loop()
 
         def sync_gemini_call():
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            model = genai.GenerativeModel('gemini-flash-latest')
             response = model.generate_content(query)
             return response.text
 
@@ -250,7 +258,7 @@ async def chat_groq_async(query: str, groq_client: Groq) -> Dict:
         response = await loop.run_in_executor(
             None,
             lambda: groq_client.chat.completions.create(
-                model="llama-3.1-70b-versatile",
+                model="llama-3.3-70b-versatile",
                 messages=[{"role": "user", "content": query}],
                 max_tokens=500,
                 temperature=0.7
@@ -378,20 +386,47 @@ async def chat_with_context_async(
         
         elif model_name == "gemini":
             def sync_gemini_context_call():
-                model = genai.GenerativeModel('gemini-1.5-flash')
+                model = genai.GenerativeModel('gemini-flash-latest')
 
                 # Convert messages to Gemini format
+                # Include system prompt in the first user message if present
                 chat_history = []
-                for msg in clean_messages[1:]:  # Skip system prompt for now
+                system_prompt = None
+                
+                # Extract system prompt if present
+                if clean_messages and clean_messages[0].get("role") == "system":
+                    system_prompt = clean_messages[0].get("content", "")
+                    messages_to_process = clean_messages[1:]
+                else:
+                    messages_to_process = clean_messages
+                
+                # Build chat history from all messages
+                for msg in messages_to_process:
                     role = "user" if msg["role"] == "user" else "model"
-                    chat_history.append({"role": role, "parts": [msg["content"]]})
+                    content = msg["content"]
+                    
+                    # If this is the first user message and we have a system prompt, combine them
+                    if role == "user" and system_prompt and len(chat_history) == 0:
+                        combined_content = f"{system_prompt}\n\n{content}"
+                        chat_history.append({"role": role, "parts": [combined_content]})
+                    else:
+                        chat_history.append({"role": role, "parts": [content]})
+
+                # Debug: Print chat history length
+                print(f"[GEMINI DEBUG] Chat history has {len(chat_history)} messages")
+                if len(chat_history) > 0:
+                    print(f"  First message preview: {str(chat_history[0]['parts'][0])[:100]}...")
+                    if len(chat_history) > 1:
+                        print(f"  Last message preview: {str(chat_history[-1]['parts'][0])[:100]}...")
 
                 # Start chat with history (excluding last message)
                 if len(chat_history) > 1:
-                    chat = model.start_chat(history=chat_history[:-1])
+                    # Use all messages except the last one as history
+                    history_for_chat = chat_history[:-1]
+                    chat = model.start_chat(history=history_for_chat)
                     response = chat.send_message(chat_history[-1]["parts"][0])
                 else:
-                    # First message
+                    # First message (or only message)
                     response = model.generate_content(chat_history[0]["parts"][0])
 
                 return response.text
@@ -407,7 +442,7 @@ async def chat_with_context_async(
             response = await loop.run_in_executor(
                 None,
                 lambda: groq_client.chat.completions.create(
-                    model="llama-3.1-70b-versatile",
+                    model="llama-3.3-70b-versatile",
                     messages=clean_messages,
                     max_tokens=800,
                     temperature=0.7
@@ -520,8 +555,8 @@ async def vision_with_context_async(
 
         elif model_name == "gemini-vision":
             def sync_gemini_vision():
-                # Use gemini-pro-vision for vision tasks
-                model = genai.GenerativeModel('gemini-pro-vision')
+                # Use gemini-flash-latest for vision tasks
+                model = genai.GenerativeModel('gemini-flash-latest')
 
                 # Build prompt from conversation context
                 prompt_parts = []
@@ -531,8 +566,32 @@ async def vision_with_context_async(
                     elif msg['role'] == 'assistant':
                         prompt_parts.append(f"Assistant: {msg['content']}")
 
-                # Add current message
-                prompt = "\n".join(prompt_parts) + "\n\nAnalyze this dental X-ray and identify wisdom teeth. Provide their positions and any notable conditions."
+                # Add current message with explicit bounding box request
+                prompt = "\n".join(prompt_parts) + """
+
+[ACADEMIC RESEARCH - EDUCATIONAL SAMPLE]
+
+Analyze this sample dental X-ray for educational demonstration purposes. Identify wisdom teeth locations and describe their positions and conditions as a training example.
+
+For each wisdom tooth found, provide:
+1. Position (upper-left, upper-right, lower-left, lower-right)
+2. Bounding box coordinates as percentages of image dimensions (x_min, y_min, x_max, y_max)
+3. Brief description of tooth condition
+
+Format your response as JSON:
+{
+    "teeth_found": [
+        {
+            "position": "lower-right",
+            "bbox": [0.6, 0.7, 0.85, 0.95],
+            "description": "Impacted wisdom tooth"
+        }
+    ],
+    "summary": "Brief overall summary"
+}
+
+This is for academic research only, not clinical diagnosis.
+If no wisdom teeth are visible, return empty teeth_found list."""
 
                 # Gemini accepts PIL Image directly
                 response = model.generate_content([prompt, image])

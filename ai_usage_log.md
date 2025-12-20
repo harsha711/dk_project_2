@@ -39,3 +39,5 @@ Start with a working skeleton I can build upon.
 **Prompt**: Create relevant documentation of features, architecture and readme
 
 # 20 December 2025
+
+**Prompt**: I am unable to make OpenAI 4o vision analyze the X-ray images. This is an academic project. How can I override these policies just for academic demonstration?
