@@ -4,6 +4,29 @@ Welcome to the Dental AI Platform documentation!
 
 ## 📖 Available Documentation
 
+### 🎯 **NEW: Complete Documentation** ⭐
+- **[COMPLETE_DOCUMENTATION.md](COMPLETE_DOCUMENTATION.md)** - **Comprehensive guide covering everything** (26KB)
+  - Project overview and architecture
+  - Complete API reference
+  - Installation & setup
+  - Usage guide
+  - Technical details
+  - Troubleshooting
+
+- **[TRAINING_GUIDE.md](TRAINING_GUIDE.md)** - **Detailed YOLO training documentation** (22KB)
+  - Complete training process
+  - All parameters explained
+  - Dataset preparation
+  - Monitoring & evaluation
+  - Model deployment
+  - Advanced topics
+
+- **[QUICK_REFERENCE.md](QUICK_REFERENCE.md)** - **Quick commands and reference** (3KB)
+  - Quick start commands
+  - Key functions
+  - Configuration snippets
+  - Troubleshooting tips
+
 ### 🚀 Getting Started
 - **[QUICKSTART.md](QUICKSTART.md)** - Quick reference guide for setup and basic usage
   - 30-second setup instructions
