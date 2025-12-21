@@ -15,12 +15,10 @@ import time
 # Import utility modules
 from api_utils import (
     init_clients,
-    multimodal_chat_async
+    multimodal_chat_async,
+    detect_teeth_yolo
 )
-from image_utils import (
-    parse_vision_response,
-    draw_bounding_boxes
-)
+from image_utils import draw_bounding_boxes
 from dataset_utils import TeethDatasetManager
 from multimodal_utils import (
     route_message,
@@ -43,11 +41,11 @@ dataset_manager = TeethDatasetManager()
 
 def process_chat_message(
     message: str,
-    image: Optional[Image.Image],
+    image_file,  # Now receives file path from gr.File
     history: List,
     conversation_state: List,
     stored_annotated_images: List  # NEW: Store annotated images persistently
-) -> Tuple[List, str, Optional[Image.Image], List, dict, List, List]:
+) -> Tuple[List, str, None, List, dict, List, List]:
     """
     Process user message and return updated chat history
 
@@ -56,7 +54,7 @@ def process_chat_message(
 
     Args:
         message: User's text input
-        image: Optional uploaded image
+        image_file: File path from gr.File upload
         history: Display history (for Gradio chatbot UI)
         conversation_state: Internal conversation state with full context
         stored_annotated_images: Persistent storage for annotated images
@@ -64,6 +62,15 @@ def process_chat_message(
     Returns:
         (updated_history, cleared_message, cleared_image, annotated_images_list, gallery_update, updated_conversation_state, updated_stored_images)
     """
+    # Convert file to PIL Image if provided
+    image = None
+    if image_file is not None:
+        try:
+            image = Image.open(image_file)
+        except Exception as e:
+            print(f"Error loading image: {e}")
+            image = None
+    
     # Handle empty message with no image
     if (not message or not message.strip()) and not image:
         # Return stored images to keep gallery visible
@@ -109,7 +116,56 @@ def process_chat_message(
         # Build conversation context from state
         context = build_conversation_context(conversation_state, max_turns=5)
 
-        # Call models (async) - always pass the most recent image
+        # YOLO DETECTION FIRST (for initial vision analysis only)
+        yolo_detections = None
+        yolo_summary = None
+        if mode == "vision" and current_image:
+            print("\n[YOLO DETECTION] Running YOLOv8 for accurate bounding box detection...")
+            yolo_result = detect_teeth_yolo(current_image, conf_threshold=0.25)
+
+            if yolo_result.get("success") and yolo_result.get("teeth_found"):
+                yolo_detections = yolo_result.get("teeth_found", [])
+                print(f"  ✅ YOLO detected {len(yolo_detections)} teeth/features")
+
+                # Create detection summary for text models
+                detection_details = []
+                for det in yolo_detections:
+                    class_name = det.get('class_name', 'unknown')
+                    position = det.get('position', 'unknown')
+                    confidence = det.get('confidence', 0)
+                    detection_details.append(f"{class_name} at {position} ({confidence:.0%} confidence)")
+
+                yolo_summary = f"""YOLO Object Detection Results:
+- Total detections: {len(yolo_detections)}
+- Findings: {', '.join(detection_details)}
+
+Based on these YOLO detections, please provide a brief clinical analysis (2-3 sentences) about:
+1. What these findings indicate about the dental condition
+2. Any concerns or recommendations
+3. Suggested follow-up actions"""
+
+                print(f"  📝 YOLO summary created for text model analysis")
+            else:
+                print(f"  ⚠️ YOLO detection failed or found no teeth: {yolo_result.get('summary', 'Unknown error')}")
+                yolo_summary = f"YOLO Detection: {yolo_result.get('summary', 'No teeth detected')}"
+
+        # Modify context to include YOLO results for text models
+        analysis_context = context.copy()
+        if yolo_summary and mode == "vision":
+            # Add YOLO results to the last user message for text model analysis
+            if analysis_context and analysis_context[-1]['role'] == 'user':
+                original_content = analysis_context[-1]['content']
+                analysis_context[-1] = {
+                    "role": "user",
+                    "content": f"{original_content}\n\n{yolo_summary}"
+                }
+                print(f"[CONTEXT DEBUG] Added YOLO summary to user message")
+                print(f"  Original: {original_content[:100]}...")
+                print(f"  With YOLO: {analysis_context[-1]['content'][:200]}...")
+            else:
+                print(f"[CONTEXT DEBUG] ⚠️ Could not add YOLO summary - context structure issue")
+
+        # Call models (async) - now with YOLO context for vision mode
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
@@ -117,7 +173,7 @@ def process_chat_message(
             multimodal_chat_async(
                 message=message,
                 image=current_image,
-                conversation_context=context,
+                conversation_context=analysis_context,
                 models=models,
                 openai_client=openai_client,
                 groq_client=groq_client
@@ -126,50 +182,19 @@ def process_chat_message(
 
         loop.close()
 
-        # Handle vision responses differently (with image annotations)
-        if mode in ["vision", "vision-followup"]:
+        # Handle vision mode (initial image upload with YOLO detection)
+        if mode == "vision":
             # Parse vision responses and draw bounding boxes
             annotated_images = {}
             annotated_list = []
 
-            # Process vision model responses for annotations
-            for model_name, response_text in responses.items():
-                if model_name in ["gemini-vision", "groq-vision"]:
-                    print(f"\n[VISION DEBUG] {model_name} response preview:")
-                    print(f"  {response_text[:200]}...")
-                    
-                    # Check if Groq Vision is not available
-                    if model_name == "groq-vision" and ("not currently available" in response_text.lower() or 
-                                                         "not available" in response_text.lower() or
-                                                         "not supported" in response_text.lower()):
-                        print(f"  ⚠️ Groq Vision is not available")
-                        continue
-
-                    # Check if this is a follow-up question
-                    if mode == "vision-followup":
-                        print(f"  ✅ Follow-up response (natural language): {response_text[:100]}...")
-                        # Don't try to parse as JSON for follow-ups
-                    else:
-                        # Initial analysis - try to parse JSON and draw bounding boxes
-                        parsed = parse_vision_response(response_text)
-
-                        if parsed.get('error'):
-                            print(f"  ❌ Parse error: {parsed.get('error')}")
-                        else:
-                            print(f"  ✅ Parsed successfully, found {len(parsed.get('teeth_found', []))} teeth")
-
-                        # If teeth were detected with bounding boxes, draw them
-                        if parsed.get('teeth_found') and not parsed.get('error') and current_image:
-                            teeth = parsed.get('teeth_found', [])
-                            if teeth and isinstance(teeth, list) and len(teeth) > 0:
-                                print(f"  🎨 Drawing {len(teeth)} bounding boxes")
-                                annotated = draw_bounding_boxes(current_image, teeth)
-                                annotated_images[model_name] = annotated
-                                if "groq" in model_name:
-                                    model_label = "Llama 3.2 Vision"
-                                else:
-                                    model_label = "Gemini Vision"
-                                annotated_list.append((annotated, model_label))
+            # Create annotated image from YOLO detections
+            if yolo_detections:
+                print(f"  🎨 Creating annotated image with {len(yolo_detections)} YOLO detections")
+                yolo_annotated = draw_bounding_boxes(current_image, yolo_detections, show_confidence=True)
+                annotated_images["yolo"] = yolo_annotated
+                annotated_list.append((yolo_annotated, "YOLOv8 Detection"))
+                print(f"  ✅ Annotated image created")
 
             # Format vision response with annotated images
             from multimodal_utils import format_vision_response
@@ -316,25 +341,103 @@ custom_css = """
     border: 1px solid #e0e0e0;
 }
 
-.model-badge {
-    display: inline-block;
-    padding: 4px 8px;
-    border-radius: 4px;
-    font-size: 12px;
-    font-weight: bold;
-    margin-right: 5px;
+/* Constrain images in chat to prevent oversized display */
+.chat-container img,
+.message img,
+[class*="message"] img,
+[class*="chat"] img {
+    max-width: 500px !important;
+    max-height: 400px !important;
+    width: auto !important;
+    height: auto !important;
+    object-fit: contain !important;
+    border-radius: 8px;
+    margin: 5px 0;
 }
 
-.vision-result {
-    border: 2px solid #4ECDC4;
+/* Ensure chat messages don't overflow */
+.message {
+    max-width: 100% !important;
+    overflow: hidden !important;
+}
+
+/* Smaller gallery images with proper sizing */
+.gradio-gallery {
+    max-height: 450px !important;
+}
+
+.gradio-gallery img {
+    max-width: 600px !important;
+    max-height: 400px !important;
+    width: auto !important;
+    height: auto !important;
+    object-fit: contain !important;
+    cursor: pointer !important;
+    transition: transform 0.2s ease;
+}
+
+.gradio-gallery img:hover {
+    transform: scale(1.02);
+}
+
+/* Gallery container styling */
+.gradio-gallery .grid-wrap {
+    max-height: 450px !important;
+    overflow-y: auto !important;
+}
+
+/* Modal overlay for fullscreen image */
+.image-modal-overlay {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: rgba(0, 0, 0, 0.95);
+    z-index: 9999;
+    justify-content: center;
+    align-items: center;
+    cursor: zoom-out;
+}
+
+.image-modal-overlay.active {
+    display: flex !important;
+}
+
+.image-modal-content {
+    max-width: 95vw;
+    max-height: 95vh;
+    object-fit: contain;
     border-radius: 8px;
-    padding: 15px;
-    margin: 10px 0;
+}
+
+.modal-close-btn {
+    position: absolute;
+    top: 20px;
+    right: 30px;
+    font-size: 40px;
+    color: white;
+    cursor: pointer;
+    background: none;
+    border: none;
+    z-index: 10000;
+}
+
+.modal-close-btn:hover {
+    color: #ff6b6b;
 }
 """
 
-# Build the Gradio app
-with gr.Blocks(css=custom_css, title="Dental AI Platform") as demo:
+# Build the Gradio app with dark theme
+with gr.Blocks(css=custom_css, title="Dental AI Platform", theme=gr.themes.Soft(primary_hue="purple", secondary_hue="blue").set(
+    body_background_fill="*neutral_950",
+    body_background_fill_dark="*neutral_950",
+    block_background_fill="*neutral_900",
+    block_background_fill_dark="*neutral_900",
+    input_background_fill="*neutral_800",
+    input_background_fill_dark="*neutral_800",
+)) as demo:
     # Header
     gr.HTML("""
     <div class="header-gradient">
@@ -343,6 +446,69 @@ with gr.Blocks(css=custom_css, title="Dental AI Platform") as demo:
             Upload dental X-rays • Get wisdom tooth analysis • Ask follow-up questions
         </p>
     </div>
+
+    <!-- Modal for fullscreen image viewing -->
+    <div id="imageModal" class="image-modal-overlay" onclick="closeModal()">
+        <button class="modal-close-btn" onclick="closeModal()">&times;</button>
+        <img id="modalImage" class="image-modal-content" src="" alt="Fullscreen view">
+    </div>
+
+    <script>
+        // Function to open modal with fullscreen image
+        function openModal(imgSrc) {
+            const modal = document.getElementById('imageModal');
+            const modalImg = document.getElementById('modalImage');
+            modal.classList.add('active');
+            modalImg.src = imgSrc;
+            document.body.style.overflow = 'hidden'; // Prevent scrolling
+        }
+
+        // Function to close modal
+        function closeModal() {
+            const modal = document.getElementById('imageModal');
+            modal.classList.remove('active');
+            document.body.style.overflow = 'auto'; // Re-enable scrolling
+        }
+
+        // Add click handlers to gallery images after page loads
+        document.addEventListener('DOMContentLoaded', function() {
+            setTimeout(function() {
+                addImageClickHandlers();
+            }, 1000);
+        });
+
+        // Add click handlers to all gallery images
+        function addImageClickHandlers() {
+            const galleryImages = document.querySelectorAll('.gradio-gallery img');
+            galleryImages.forEach(img => {
+                if (!img.hasAttribute('data-modal-listener')) {
+                    img.setAttribute('data-modal-listener', 'true');
+                    img.addEventListener('click', function(e) {
+                        e.stopPropagation();
+                        openModal(this.src);
+                    });
+                }
+            });
+        }
+
+        // Re-run handler attachment when gallery updates (mutation observer)
+        const observer = new MutationObserver(function(mutations) {
+            addImageClickHandlers();
+        });
+
+        // Start observing the document for changes
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true
+        });
+
+        // Close modal on ESC key
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                closeModal();
+            }
+        });
+    </script>
     """)
 
     with gr.Tabs():
@@ -371,32 +537,36 @@ with gr.Blocks(css=custom_css, title="Dental AI Platform") as demo:
 
             # Annotated images gallery (for vision results)
             annotated_gallery = gr.Gallery(
-                label="📊 Annotated X-Rays (Wisdom Teeth Detected)",
+                label="📊 Annotated X-Rays (Click to maximize)",
                 show_label=True,
-                columns=2,
-                height=300,
-                visible=False
+                columns=1,
+                rows=1,
+                height=350,
+                object_fit="contain",
+                visible=False,
+                allow_preview=True,
+                preview=True
             )
 
             # Input area
             with gr.Row():
-                with gr.Column(scale=1):
-                    image_upload = gr.Image(
-                        type="pil",
-                        label="📎 Upload X-Ray",
-                        height=100
-                    )
-
-                with gr.Column(scale=9):
+                with gr.Column(scale=8):
                     msg_input = gr.Textbox(
-                        placeholder="Ask about wisdom teeth or upload an X-ray...",
+                        placeholder="Ask about wisdom teeth or upload an X-ray image...",
                         label="Your Message",
-                        lines=2
+                        lines=2,
+                        show_label=False
                     )
 
                     with gr.Row():
-                        clear_btn = gr.Button("🗑️ Clear Chat", scale=1)
-                        send_btn = gr.Button("Send ➤", variant="primary", scale=1)
+                        image_upload = gr.File(
+                            label="📎 X-Ray",
+                            file_types=["image"],
+                            file_count="single",
+                            scale=1
+                        )
+                        clear_btn = gr.Button("🗑️ Clear", scale=1, size="lg")
+                        send_btn = gr.Button("Send ➤", variant="primary", scale=2, size="lg")
 
             # Example questions
             gr.Examples(
@@ -433,7 +603,11 @@ with gr.Blocks(css=custom_css, title="Dental AI Platform") as demo:
         with gr.Tab("📊 Dataset Explorer"):
             gr.Markdown("""
             ### Explore the RayanAi Dental X-Ray Dataset (1,206 samples)
-            Browse, search, and batch-process dental X-rays from Hugging Face.
+            Browse samples and **send them directly to AI for analysis**!
+            
+            1. Click **Load Dataset** to fetch from Hugging Face
+            2. Browse using Previous/Next or Random
+            3. Click **🔬 Analyze with AI** to get wisdom tooth detection
             """)
 
             with gr.Row():
@@ -508,25 +682,99 @@ Use the navigation buttons to explore samples!"""
                     current_index = gr.Number(value=0, label="Current Index", visible=False)
 
                     with gr.Row():
-                        prev_btn = gr.Button("⬅️ Previous")
-                        next_btn = gr.Button("Next ➡️")
+                        prev_btn = gr.Button("⬅️ Previous", scale=1)
+                        next_btn = gr.Button("Next ➡️", scale=1)
 
-                    random_btn = gr.Button("🎲 Random Sample", variant="secondary")
+                    random_btn = gr.Button("🎲 Random Sample", variant="secondary", size="lg")
                     jump_index = gr.Number(label="Jump to Index", value=0, minimum=0, maximum=1205)
-                    jump_btn = gr.Button("Go to Index")
+                    jump_btn = gr.Button("Go to Index", size="lg")
+                    
+                    gr.Markdown("---")
+                    analyze_btn = gr.Button("🔬 Analyze with AI", variant="primary", size="lg")
+                    analyze_status = gr.Markdown(value="")
+            
+            # Analysis results section - shows results right here in Dataset Explorer
+            gr.Markdown("---\n### 🤖 AI Analysis Results")
+            analysis_output = gr.Markdown(value="*Click 'Analyze with AI' on a sample to see results here*")
+            analysis_gallery = gr.Gallery(
+                label="📊 Annotated X-Ray (Click to maximize)",
+                show_label=True,
+                columns=1,
+                rows=1,
+                height=350,
+                object_fit="contain",
+                visible=False,
+                allow_preview=True,
+                preview=True
+            )
+
+            # Function to send dataset image to chatbot for analysis
+            def analyze_dataset_image(image, current_idx):
+                if image is None:
+                    return "❌ No image loaded. Please load the dataset and select a sample first."
+                return f"✅ **Sample #{int(current_idx)}** sent to AI for analysis! Check the results below."
+            
+            def run_analysis_on_sample(image, history, conversation_state, stored_annotated_images):
+                """Run AI analysis on the dataset sample"""
+                if image is None:
+                    return history, stored_annotated_images, gr.update(visible=False), conversation_state, stored_annotated_images, "❌ No image to analyze", "❌ No image to analyze", [], gr.update(visible=False)
+                
+                # Convert numpy array to PIL Image if needed
+                if not isinstance(image, Image.Image):
+                    image = Image.fromarray(image)
+                
+                # Save image temporarily for processing
+                import tempfile
+                import os
+                temp_path = os.path.join(tempfile.gettempdir(), "dataset_sample.png")
+                image.save(temp_path)
+                
+                # Call the main processing function
+                result = process_chat_message(
+                    message="Analyze this dental X-ray from the dataset. Identify any wisdom teeth and their condition.",
+                    image_file=temp_path,
+                    history=history,
+                    conversation_state=conversation_state,
+                    stored_annotated_images=stored_annotated_images
+                )
+                
+                # Clean up temp file
+                try:
+                    os.remove(temp_path)
+                except:
+                    pass
+                
+                # Extract the analysis text from the last assistant message in history
+                analysis_text = "Analysis complete!"
+                if result[0] and len(result[0]) > 0:
+                    last_msg = result[0][-1]
+                    if isinstance(last_msg, dict) and last_msg.get('role') == 'assistant':
+                        analysis_text = last_msg.get('content', 'Analysis complete!')
+                
+                # Get annotated images - same format as chatbot: list of (image, label) tuples
+                annotated_imgs = result[3] if result[3] else []
+                gallery_visible = len(annotated_imgs) > 0
+                
+                # Return: history, stored_images, gallery_update, conversation_state, stored_images, status, analysis_text, analysis_gallery_images, analysis_gallery_visible
+                return result[0], result[3], result[4], result[5], result[6], "✅ Analysis complete!", analysis_text, annotated_imgs, gr.update(visible=gallery_visible)
 
             # Navigation events
             next_btn.click(fn=next_sample, inputs=[current_index], outputs=[sample_image, sample_info, current_index])
             prev_btn.click(fn=prev_sample, inputs=[current_index], outputs=[sample_image, sample_info, current_index])
             random_btn.click(fn=random_sample, outputs=[sample_image, sample_info, current_index])
             jump_btn.click(fn=browse_sample, inputs=[jump_index], outputs=[sample_image, sample_info, current_index])
+            
+            # Analyze button - sends to chatbot AND shows results here
+            analyze_btn.click(
+                fn=run_analysis_on_sample,
+                inputs=[sample_image, chatbot, conversation_state, stored_annotated_images],
+                outputs=[chatbot, annotated_gallery, annotated_gallery, conversation_state, stored_annotated_images, analyze_status, analysis_output, analysis_gallery, analysis_gallery]
+            )
 
     # Footer
     gr.Markdown("""
     ---
-    **Dental AI Platform v2.1** | Unified Chatbot | Powered by Groq, Google Gemini, and Hugging Face
-    
-    ⚠️ **Note:** Gemini may be rate-limited on free tier. Groq Llama Vision is recommended for consistent results.
+    **Dental AI Platform v2.2** | Multi-Model Chatbot + Dataset Integration | Powered by Groq, Google Gemini, and Hugging Face
     """)
 
 
@@ -542,6 +790,8 @@ if __name__ == "__main__":
     print("     - Upload X-rays for analysis")
     print("     - Annotated images persist during follow-ups")
     print("  ✅ Tab 2: Dataset Explorer (1,206 samples)")
+    print("     - Browse HuggingFace dental X-ray dataset")
+    print("     - One-click AI analysis on any sample")
     print("="*60 + "\n")
 
     demo.launch(
