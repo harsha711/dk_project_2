@@ -1,52 +1,8 @@
 """
 Image processing utilities for dental X-ray analysis
 """
-import json
 from PIL import Image, ImageDraw, ImageFont
-from typing import Dict, List, Tuple, Optional
-
-
-def parse_vision_response(response_text: str) -> Dict:
-    """
-    Parse JSON response from vision models
-    Returns parsed dict or error dict
-    """
-    try:
-        # Try to extract JSON from markdown code blocks
-        if "```json" in response_text:
-            start = response_text.find("```json") + 7
-            end = response_text.find("```", start)
-            json_str = response_text[start:end].strip()
-        elif "```" in response_text:
-            start = response_text.find("```") + 3
-            end = response_text.find("```", start)
-            json_str = response_text[start:end].strip()
-        else:
-            # Try to find JSON object in the response
-            # Look for { ... } pattern
-            json_start = response_text.find('{')
-            json_end = response_text.rfind('}')
-
-            if json_start != -1 and json_end != -1 and json_end > json_start:
-                json_str = response_text[json_start:json_end + 1].strip()
-            else:
-                json_str = response_text.strip()
-
-        parsed = json.loads(json_str)
-
-        # Log what was parsed
-        print(f"[PARSE DEBUG] Successfully parsed JSON with {len(parsed.get('teeth_found', []))} teeth")
-
-        return parsed
-
-    except json.JSONDecodeError as e:
-        print(f"[PARSE ERROR] Failed to parse JSON: {str(e)}")
-        print(f"[PARSE ERROR] Response preview: {response_text[:300]}...")
-        return {
-            "error": f"Failed to parse JSON: {str(e)}",
-            "raw_response": response_text,
-            "teeth_found": []  # Return empty list to prevent errors downstream
-        }
+from typing import Dict, List
 
 
 def draw_bounding_boxes(image: Image.Image, detections: List[Dict], show_confidence: bool = True) -> Image.Image:

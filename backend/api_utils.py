@@ -7,9 +7,7 @@ CLEAN VERSION:
 - All vision models removed (were hallucinating coordinates)
 """
 import os
-import base64
 import asyncio
-from io import BytesIO
 from typing import Dict, Optional
 from openai import OpenAI
 from groq import Groq
@@ -55,31 +53,60 @@ def get_yolo_model():
     return _yolo_model
 
 
-def detect_teeth_yolo(image: Image.Image, conf_threshold: float = 0.25) -> Dict:
+def detect_teeth_yolo(image: Image.Image, conf_threshold: float = 0.35, iou_threshold: float = 0.4) -> Dict:
     """
     Detect teeth in dental X-ray using YOLOv8 model
 
     Args:
         image: PIL Image of dental X-ray
-        conf_threshold: Confidence threshold for detections (default: 0.25)
+        conf_threshold: Base confidence threshold for detections (default: 0.35 for better precision)
+        iou_threshold: NMS IoU threshold (default: 0.4, more aggressive to reduce overlaps)
 
     Returns:
         Dict with detected teeth information
     """
+    # Class-specific confidence thresholds to reduce false positives
+    CLASS_CONFIDENCE_THRESHOLDS = {
+        "Impacted": 0.25,           # Lower threshold to catch more impacted teeth
+        "impacted": 0.25,           # Case-insensitive variant
+        "Impacted Tooth": 0.25,     # Roboflow model class name
+        "impacted tooth": 0.25,     # Case-insensitive
+        "Cavity": 0.30,
+        "Caries": 0.30,
+        "caries": 0.30,
+        "Deep Caries": 0.30,
+        "deep caries": 0.30,
+        "Fillings": 0.30,
+        "Implant": 0.30,
+    }
+
     try:
         model = get_yolo_model()
         img_array = np.array(image)
-        results = model(img_array, conf=conf_threshold, verbose=False)
+
+        print(f"🔍 YOLO Detection Debug:")
+        print(f"  - Image size: {img_array.shape[:2]}")
+        print(f"  - Base confidence threshold: {conf_threshold}")
+        print(f"  - IoU threshold: {iou_threshold}")
+        print(f"  - Model classes: {list(model.names.values()) if hasattr(model, 'names') else 'N/A'}")
+        print(f"  - Class-specific thresholds: {CLASS_CONFIDENCE_THRESHOLDS}")
+
+        # Use very low base threshold to catch all detections, then filter by class-specific thresholds
+        results = model(img_array, conf=0.15, iou=iou_threshold, verbose=False)
 
         img_height, img_width = img_array.shape[:2]
         teeth_found = []
+        filtered_count = 0
 
         for result in results:
             boxes = result.boxes
             if boxes is None or len(boxes) == 0:
+                print(f"  ⚠️ No boxes detected in this result")
                 continue
 
-            for box in boxes:
+            print(f"  ✅ Found {len(boxes)} raw detections (before filtering)")
+
+            for idx, box in enumerate(boxes):
                 x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
 
                 bbox_normalized = [
@@ -101,6 +128,44 @@ def detect_teeth_yolo(image: Image.Image, conf_threshold: float = 0.25) -> Dict:
                 else:
                     position = "lower-left" if center_x < 0.5 else "lower-right"
 
+                # Apply class-specific confidence threshold
+                min_confidence = CLASS_CONFIDENCE_THRESHOLDS.get(class_name, conf_threshold)
+
+                # Additional spatial filtering for "Impacted" detections
+                skip_detection = False
+                skip_reason = ""
+
+                if "impacted" in class_name.lower():
+                    # Impacted wisdom teeth are typically at the edges/back of the jaw
+                    # Relaxed threshold: x < 0.30 (left third) or x > 0.70 (right third)
+                    # This allows detection further into the jaw while still filtering middle teeth
+                    if center_y >= 0.5:  # Lower jaw
+                        if not (center_x < 0.30 or center_x > 0.70):
+                            skip_detection = True
+                            skip_reason = f"Impacted in middle of jaw (x={center_x:.2f}, needs x<0.30 or x>0.70)"
+                    else:  # Upper jaw
+                        if not (center_x < 0.30 or center_x > 0.70):
+                            skip_detection = True
+                            skip_reason = f"Impacted in middle of upper jaw (x={center_x:.2f}, needs x<0.30 or x>0.70)"
+
+                # Check confidence threshold
+                if confidence < min_confidence:
+                    skip_detection = True
+                    skip_reason = f"Confidence {confidence:.3f} below threshold {min_confidence:.3f}"
+
+                # Detailed debug for each detection
+                print(f"    [{idx+1}] {class_name} @ {position}")
+                print(f"        Confidence: {confidence:.3f} (min required: {min_confidence:.3f})")
+                print(f"        Center: ({center_x:.3f}, {center_y:.3f})")
+                print(f"        BBox: x1={bbox_normalized[0]:.3f}, y1={bbox_normalized[1]:.3f}, x2={bbox_normalized[2]:.3f}, y2={bbox_normalized[3]:.3f}")
+
+                if skip_detection:
+                    print(f"        ❌ FILTERED OUT: {skip_reason}")
+                    filtered_count += 1
+                    continue
+                else:
+                    print(f"        ✅ ACCEPTED")
+
                 description = f"{class_name} (confidence: {confidence:.2f})"
 
                 teeth_found.append({
@@ -115,7 +180,7 @@ def detect_teeth_yolo(image: Image.Image, conf_threshold: float = 0.25) -> Dict:
 
         summary = f"Detected {len(teeth_found)} teeth/dental features using YOLO" if teeth_found else "No teeth detected in the X-ray image"
 
-        print(f"  🦷 YOLO detected {len(teeth_found)} teeth/features")
+        print(f"  🦷 YOLO final results: {len(teeth_found)} accepted, {filtered_count} filtered out")
 
         return {
             "success": True,
@@ -135,13 +200,6 @@ def detect_teeth_yolo(image: Image.Image, conf_threshold: float = 0.25) -> Dict:
             "teeth_found": [],
             "summary": f"Error during YOLO detection: {str(e)}"
         }
-
-
-def encode_image_to_base64(image: Image.Image) -> str:
-    """Convert PIL Image to base64 string"""
-    buffered = BytesIO()
-    image.save(buffered, format="PNG")
-    return base64.b64encode(buffered.getvalue()).decode('utf-8')
 
 
 # ============ TEXT CHAT FUNCTIONS ============
@@ -209,6 +267,22 @@ async def chat_with_context_async(
                 "success": True
             }
 
+        elif model_name == "mixtral":
+            response = await loop.run_in_executor(
+                None,
+                lambda: groq_client.chat.completions.create(
+                    model="mixtral-8x7b-32768",
+                    messages=clean_messages,
+                    max_tokens=800,
+                    temperature=0.7
+                )
+            )
+            return {
+                "model": "mixtral",
+                "response": response.choices[0].message.content,
+                "success": True
+            }
+
     except Exception as e:
         return {
             "model": model_name,
@@ -232,9 +306,9 @@ async def multimodal_chat_async(
     """
     tasks = []
 
-    # Call text models (gpt4, groq only - gemini removed)
+    # Call text models (gpt4, groq, mixtral)
     for model in models:
-        if model in ["gpt4", "groq"]:
+        if model in ["gpt4", "groq", "mixtral"]:
             tasks.append(chat_with_context_async(
                 conversation_context,
                 model,
@@ -248,7 +322,7 @@ async def multimodal_chat_async(
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     response_dict = {}
-    valid_models = [m for m in models if m in ["gpt4", "groq"]]
+    valid_models = [m for m in models if m in ["gpt4", "groq", "mixtral"]]
 
     for i, result in enumerate(results):
         if i < len(valid_models):

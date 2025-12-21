@@ -121,7 +121,8 @@ def process_chat_message(
         yolo_summary = None
         if mode == "vision" and current_image:
             print("\n[YOLO DETECTION] Running YOLOv8 for accurate bounding box detection...")
-            yolo_result = detect_teeth_yolo(current_image, conf_threshold=0.25)
+            # Using default thresholds with class-specific filtering and spatial validation
+            yolo_result = detect_teeth_yolo(current_image)
 
             if yolo_result.get("success") and yolo_result.get("teeth_found"):
                 yolo_detections = yolo_result.get("teeth_found", [])
@@ -774,7 +775,7 @@ Use the navigation buttons to explore samples!"""
     # Footer
     gr.Markdown("""
     ---
-    **Dental AI Platform v2.2** | Multi-Model Chatbot + Dataset Integration | Powered by Groq, Google Gemini, and Hugging Face
+    **Dental AI Platform v2.3** | Multi-Model Chatbot + YOLO Detection | Powered by GPT-4o-mini, Llama 3.3, Mixtral 8x7B, and YOLOv8
     """)
 
 

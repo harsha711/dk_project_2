@@ -2,7 +2,7 @@
 Dataset utilities for Hugging Face teeth dataset integration
 """
 from datasets import load_dataset
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List
 from PIL import Image
 import random
 
@@ -245,76 +245,3 @@ class TeethDatasetManager:
             grid.paste(img, (x, y))
 
         return grid
-
-
-def batch_analyze_samples(
-    samples: List[Dict],
-    model_choice: str,
-    openai_client,
-    groq_client
-) -> List[Dict]:
-    """
-    Batch analyze multiple dental X-ray samples
-
-    Args:
-        samples: List of sample dicts with 'image' key
-        model_choice: Vision model to use
-        openai_client: OpenAI client
-        groq_client: Groq client (unused for vision)
-
-    Returns:
-        List of analysis results
-    """
-    from api_utils import analyze_xray_gpt4v, analyze_xray_gemini
-    from image_utils import parse_vision_response
-
-    results = []
-
-    for sample in samples:
-        image = sample['image']
-
-        # Analyze with selected model
-        if model_choice == "GPT-4o Vision":
-            result = analyze_xray_gpt4v(image, openai_client)
-        else:
-            result = analyze_xray_gemini(image)
-
-        # Parse response
-        if result["success"]:
-            parsed = parse_vision_response(result["response"])
-            results.append({
-                "index": sample.get('index', -1),
-                "success": True,
-                "parsed": parsed,
-                "raw": result["response"]
-            })
-        else:
-            results.append({
-                "index": sample.get('index', -1),
-                "success": False,
-                "error": result.get("error", "Unknown error")
-            })
-
-    return results
-
-
-def export_analysis_results(results: List[Dict], filename: str = "analysis_results.json") -> bool:
-    """
-    Export batch analysis results to JSON file
-
-    Args:
-        results: List of analysis result dicts
-        filename: Output filename
-
-    Returns:
-        True if successful
-    """
-    import json
-
-    try:
-        with open(filename, 'w') as f:
-            json.dump(results, f, indent=2, default=str)
-        return True
-    except Exception as e:
-        print(f"Export failed: {e}")
-        return False

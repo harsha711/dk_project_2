@@ -2,9 +2,9 @@
 Multimodal utilities for unified chatbot interface
 Handles message routing, context building, and response formatting
 
-FIXED VERSION:
-- Groq Vision as primary (Gemini is rate-limited)
-- Better handling of vision model fallbacks
+YOLO + Text Models:
+- YOLOv8 for accurate bounding box detection
+- GPT-4o-mini, Llama 3.3, and Mixtral 8x7B for text analysis
 """
 from typing import Dict, List, Optional, Tuple
 from PIL import Image
@@ -31,54 +31,6 @@ Guidelines:
 - If a user references something from earlier in the conversation, use that context in your response
 
 IMPORTANT DISCLAIMER: This is for educational and informational purposes only. Not for clinical diagnosis. Real medical decisions must be made by licensed dental professionals."""
-
-
-def convert_vision_to_text(vision_responses: List[tuple]) -> str:
-    """
-    Convert vision model responses (JSON or natural language) to readable text for context
-    
-    Args:
-        vision_responses: List of tuples (model_name, response_text)
-    
-    Returns:
-        Natural language summary of vision analysis
-    """
-    summary_parts = []
-    
-    for model_name, vision_response in vision_responses:
-        if not vision_response:
-            continue
-            
-        try:
-            import json
-            # Try to parse as JSON
-            parsed = json.loads(vision_response)
-            if isinstance(parsed, dict):
-                # Create a natural language summary from JSON
-                model_summary = []
-                if parsed.get('summary'):
-                    model_summary.append(f"{parsed['summary']}")
-                if parsed.get('teeth_found') and isinstance(parsed['teeth_found'], list):
-                    teeth_count = len(parsed['teeth_found'])
-                    if teeth_count > 0:
-                        model_summary.append(f"Found {teeth_count} wisdom tooth/teeth:")
-                        for tooth in parsed['teeth_found']:
-                            pos = tooth.get('position', 'unknown')
-                            desc = tooth.get('description', 'no description')
-                            model_summary.append(f"- {pos}: {desc}")
-                    else:
-                        model_summary.append("No wisdom teeth detected.")
-                
-                if model_summary:
-                    summary_parts.append(f"[{model_name}]: {' '.join(model_summary)}")
-        except (json.JSONDecodeError, AttributeError, TypeError):
-            # Not JSON or parsing failed - use as-is (might be natural language already)
-            response_str = str(vision_response).lower()
-            # Skip error/unavailable messages
-            if "not currently available" not in response_str and "not available" not in response_str and "quota exceeded" not in response_str:
-                summary_parts.append(f"[{model_name}]: {vision_response}")
-    
-    return "\n".join(summary_parts) if summary_parts else ""
 
 
 def route_message(
@@ -115,15 +67,14 @@ def route_message(
         if has_image:
             # User uploaded new image - use YOLO + text models for analysis
             # Vision models removed - they hallucinate coordinates
-            mode, models = "vision", ["gpt4", "groq"]
+            mode, models = "vision", ["gpt4", "groq", "mixtral"]
         elif has_recent_image and mentions_image:
             # Follow-up question about previous image - use text models directly
             # They have YOLO results + conversation history for context
-            mode, models = "chat", ["gpt4", "groq"]
+            mode, models = "chat", ["gpt4", "groq", "mixtral"]
         else:
-            # Text-only question - use both text models
-            # Gemini removed (not implemented)
-            mode, models = "chat", ["gpt4", "groq"]
+            # Text-only question - use all text models
+            mode, models = "chat", ["gpt4", "groq", "mixtral"]
 
         # Log routing decision
         print(f"[ROUTING] Mode: {mode}, Models: {models}, Has Image: {has_image}, Has Recent: {has_recent_image}")
@@ -135,7 +86,7 @@ def route_message(
         import traceback
         traceback.print_exc()
         # Default to chat mode on error
-        return "chat", ["gpt4", "gemini", "groq"]
+        return "chat", ["gpt4", "groq", "mixtral"]
 
 
 def build_conversation_context(
@@ -181,11 +132,11 @@ def build_conversation_context(
         elif msg['role'] == 'assistant':
             model_responses = msg.get('model_responses', {})
 
-            # Get text responses (vision models removed - using YOLO + text only)
+            # Get text responses (YOLO + text models only)
             text_response = (
                 model_responses.get('gpt4', '') or
                 model_responses.get('groq', '') or
-                model_responses.get('gemini', '')
+                model_responses.get('mixtral', '')
             )
 
             # Add to context
@@ -215,12 +166,8 @@ def format_multi_model_response(responses: Dict[str, str]) -> str:
         Formatted markdown string
     """
     gpt4 = responses.get('gpt4', 'No response')
-    gemini = responses.get('gemini', 'No response')
     groq = responses.get('groq', 'No response')
-    
-    # Check if Gemini hit rate limit
-    if "quota exceeded" in gemini.lower() or "429" in gemini:
-        gemini = "⚠️ Gemini quota exceeded (free tier limit). See other responses."
+    mixtral = responses.get('mixtral', 'No response')
 
     formatted = f"""### 🤖 AI Responses
 
@@ -231,14 +178,14 @@ def format_multi_model_response(responses: Dict[str, str]) -> str:
 {gpt4}
 </div>
 
-<div style="border: 2px solid #4ECDC4; border-radius: 8px; padding: 12px;">
-<h4 style="margin-top: 0; color: #4ECDC4;">🔵 Gemini</h4>
-{gemini}
+<div style="border: 2px solid #95E1D3; border-radius: 8px; padding: 12px;">
+<h4 style="margin-top: 0; color: #95E1D3;">🔵 Llama 3.3 70B</h4>
+{groq}
 </div>
 
-<div style="border: 2px solid #FF6B6B; border-radius: 8px; padding: 12px;">
-<h4 style="margin-top: 0; color: #FF6B6B;">🟠 Groq Llama3</h4>
-{groq}
+<div style="border: 2px solid #F093FB; border-radius: 8px; padding: 12px;">
+<h4 style="margin-top: 0; color: #F093FB;">🟣 Mixtral 8x7B</h4>
+{mixtral}
 </div>
 
 </div>
@@ -262,11 +209,12 @@ def format_vision_response(
     Returns:
         Formatted markdown string with images
     """
-    # Extract text model responses (GPT-4 and Groq analyze YOLO results)
+    # Extract text model responses (GPT-4, Groq, and Mixtral analyze YOLO results)
     gpt4_text = responses.get('gpt4', '')
     groq_text = responses.get('groq', '')
+    mixtral_text = responses.get('mixtral', '')
 
-    has_text_models = bool(gpt4_text or groq_text)
+    has_text_models = bool(gpt4_text or groq_text or mixtral_text)
 
     if has_text_models:
         # YOLO detection + text model analysis (works for both initial and follow-up)
@@ -277,16 +225,21 @@ def format_vision_response(
 <p>Accurate bounding box detection using trained dental AI model. See annotated X-ray below.</p>
 </div>
 
-<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+<div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px;">
 
 <div style="border: 2px solid #667eea; border-radius: 8px; padding: 12px;">
-<h4 style="margin-top: 0; color: #667eea;">🟢 GPT-4o-mini Analysis</h4>
+<h4 style="margin-top: 0; color: #667eea;">🟢 GPT-4o-mini</h4>
 {gpt4_text if gpt4_text else 'No response'}
 </div>
 
 <div style="border: 2px solid #95E1D3; border-radius: 8px; padding: 12px;">
-<h4 style="margin-top: 0; color: #95E1D3;">🔵 Groq Llama 3.3 70B</h4>
+<h4 style="margin-top: 0; color: #95E1D3;">🔵 Llama 3.3 70B</h4>
 {groq_text if groq_text else 'No response'}
+</div>
+
+<div style="border: 2px solid #F093FB; border-radius: 8px; padding: 12px;">
+<h4 style="margin-top: 0; color: #F093FB;">🟣 Mixtral 8x7B</h4>
+{mixtral_text if mixtral_text else 'No response'}
 </div>
 
 </div>
@@ -308,55 +261,3 @@ def format_vision_response(
 
     return formatted
 
-
-def extract_teeth_summary(responses: Dict[str, str]) -> str:
-    """
-    Extract key findings from multiple model responses
-    """
-    import re
-    all_text = ' '.join(str(v) for v in responses.values()).lower()
-
-    findings = []
-
-    if 'impacted' in all_text or 'impaction' in all_text:
-        findings.append("Impacted wisdom teeth detected")
-
-    if 'pain' in all_text or 'painful' in all_text:
-        findings.append("Pain indicators present")
-
-    if 'infection' in all_text or 'pericoronitis' in all_text:
-        findings.append("Possible infection signs")
-
-    tooth_counts = re.findall(r'(\d+)\s+wisdom\s+teeth', all_text)
-    if tooth_counts:
-        most_common = max(set(tooth_counts), key=tooth_counts.count)
-        findings.insert(0, f"{most_common} wisdom teeth identified")
-
-    if findings:
-        return "**Key Findings:** " + " | ".join(findings)
-    else:
-        return ""
-
-
-def validate_dental_question(message: str) -> Tuple[bool, Optional[str]]:
-    """
-    Check if question is wisdom teeth related
-    """
-    wisdom_keywords = [
-        'wisdom', 'third molar', 'impacted', 'extraction',
-        'tooth 1', 'tooth 16', 'tooth 17', 'tooth 32',
-        '#1', '#16', '#17', '#32'
-    ]
-
-    message_lower = message.lower()
-    is_wisdom_related = any(keyword in message_lower for keyword in wisdom_keywords)
-
-    general_dental = any(word in message_lower for word in [
-        'cavity', 'crown', 'root canal', 'filling', 'braces',
-        'whitening', 'cleaning', 'gingivitis'
-    ])
-
-    if general_dental and not is_wisdom_related:
-        return False, "I specialize in wisdom teeth. For that dental concern, please consult a general dentist."
-
-    return True, None
