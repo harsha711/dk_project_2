@@ -71,14 +71,14 @@ def route_message(
         if has_image:
             # User uploaded new image - use YOLO + text models for analysis
             # Vision models removed - they hallucinate coordinates
-            mode, models = "vision", ["gpt4", "groq", "mixtral"]
+            mode, models = "vision", ["gpt4", "groq", "qwen"]
         elif has_recent_image and mentions_image:
             # Follow-up question about previous image - use text models directly
             # They have YOLO results + conversation history for context
-            mode, models = "chat", ["gpt4", "groq", "mixtral"]
+            mode, models = "chat", ["gpt4", "groq", "qwen"]
         else:
             # Text-only question - use all text models
-            mode, models = "chat", ["gpt4", "groq", "mixtral"]
+            mode, models = "chat", ["gpt4", "groq", "qwen"]
 
         # Log routing decision
         print(f"[ROUTING] Mode: {mode}, Models: {models}, Has Image: {has_image}, Has Recent: {has_recent_image}")
@@ -90,7 +90,7 @@ def route_message(
         import traceback
         traceback.print_exc()
         # Default to chat mode on error
-        return "chat", ["gpt4", "groq", "mixtral"]
+        return "chat", ["gpt4", "groq", "qwen"]
 
 
 def build_conversation_context(
@@ -140,7 +140,7 @@ def build_conversation_context(
             text_response = (
                 model_responses.get('gpt4', '') or
                 model_responses.get('groq', '') or
-                model_responses.get('mixtral', '')
+                model_responses.get('qwen', '')
             )
 
             # Add to context
@@ -165,7 +165,7 @@ def format_multi_model_response(responses: Dict[str, str], selected_model: str =
 
     Args:
         responses: Dict mapping model names to response strings
-        selected_model: Which model to display ("gpt4", "groq", or "mixtral")
+        selected_model: Which model to display ("gpt4", "groq", or "qwen")
 
     Returns:
         Formatted markdown string
@@ -183,11 +183,11 @@ def format_multi_model_response(responses: Dict[str, str], selected_model: str =
             "emoji": "🔵",
             "key": "groq"
         },
-        "mixtral": {
+        "qwen": {
             "name": "Qwen 3 32B",
             "color": "#F093FB",
             "emoji": "🟣",
-            "key": "mixtral"
+            "key": "qwen"
         }
     }
     
@@ -220,7 +220,7 @@ def format_vision_response(
     Args:
         responses: Dict mapping model names to response text strings
         annotated_images: Dict mapping model names to annotated images
-        selected_model: Which model to display ("gpt4", "groq", or "mixtral")
+        selected_model: Which model to display ("gpt4", "groq", or "qwen")
 
     Returns:
         Formatted markdown string with images
@@ -238,11 +238,11 @@ def format_vision_response(
             "emoji": "🔵",
             "key": "groq"
         },
-        "mixtral": {
+        "qwen": {
             "name": "Qwen 3 32B",
             "color": "#F093FB",
             "emoji": "🟣",
-            "key": "mixtral"
+            "key": "qwen"
         }
     }
     

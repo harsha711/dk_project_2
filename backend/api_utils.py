@@ -260,7 +260,7 @@ async def chat_with_context_async(
                 lambda: openai_client.chat.completions.create(
                     model="gpt-4o-mini",
                     messages=clean_messages,
-                    max_tokens=800,
+                    max_tokens=2000,  # Increased for complete responses
                     temperature=0.7
                 )
             )
@@ -276,7 +276,7 @@ async def chat_with_context_async(
                 lambda: groq_client.chat.completions.create(
                     model="llama-3.3-70b-versatile",
                     messages=clean_messages,
-                    max_tokens=800,
+                    max_tokens=2000,  # Increased for complete responses
                     temperature=0.7
                 )
             )
@@ -286,19 +286,19 @@ async def chat_with_context_async(
                 "success": True
             }
 
-        elif model_name == "mixtral":
-            # Use Qwen 3 32B as third model
+        elif model_name == "qwen":
+            # Use Qwen 2.5 32B as third model
             response = await loop.run_in_executor(
                 None,
                 lambda: groq_client.chat.completions.create(
-                    model="qwen/qwen3-32b",  # Qwen 3 32B
+                    model="qwen/qwen-2.5-32b-instruct",  # Qwen 2.5 32B
                     messages=clean_messages,
-                    max_tokens=800,
+                    max_tokens=2000,  # Increased for complete responses
                     temperature=0.7
                 )
             )
             return {
-                "model": "mixtral",  # Keep name for compatibility
+                "model": "qwen",
                 "response": response.choices[0].message.content,
                 "success": True
             }
@@ -326,9 +326,9 @@ async def multimodal_chat_async(
     """
     tasks = []
 
-    # Call text models (gpt4, groq, mixtral)
+    # Call text models (gpt4, groq, qwen)
     for model in models:
-        if model in ["gpt4", "groq", "mixtral"]:
+        if model in ["gpt4", "groq", "qwen"]:
             tasks.append(chat_with_context_async(
                 conversation_context,
                 model,
@@ -342,7 +342,7 @@ async def multimodal_chat_async(
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     response_dict = {}
-    valid_models = [m for m in models if m in ["gpt4", "groq", "mixtral"]]
+    valid_models = [m for m in models if m in ["gpt4", "groq", "qwen"]]
 
     for i, result in enumerate(results):
         if i < len(valid_models):

@@ -18,7 +18,7 @@ from api_utils import (
     multimodal_chat_async,
     detect_teeth_yolo
 )
-from image_utils import draw_bounding_boxes
+from image_utils import draw_bounding_boxes, apply_clahe
 from dataset_utils import TeethDatasetManager
 from multimodal_utils import (
     route_message,
@@ -46,7 +46,8 @@ def process_chat_message(
     history: List,
     conversation_state: List,
     stored_annotated_images: List,  # NEW: Store annotated images persistently
-    selected_model: str = "gpt4"  # Selected model for display
+    selected_model: str = "gpt4",  # Selected model for display
+    apply_enhancement: bool = False  # NEW: Apply CLAHE enhancement
 ) -> Tuple[List, str, None, List, dict, List, List]:
     """
     Process user message and return updated chat history
@@ -60,6 +61,8 @@ def process_chat_message(
         history: Display history (for Gradio chatbot UI)
         conversation_state: Internal conversation state with full context
         stored_annotated_images: Persistent storage for annotated images
+        selected_model: Which model to display ("gpt4", "groq", or "qwen")
+        apply_enhancement: Whether to apply CLAHE contrast enhancement to X-rays
 
     Returns:
         (updated_history, cleared_message, cleared_image, annotated_images_list, gallery_update, updated_conversation_state, updated_stored_images)
@@ -69,6 +72,13 @@ def process_chat_message(
     if image_file is not None:
         try:
             image = Image.open(image_file)
+
+            # Apply CLAHE enhancement if requested
+            if apply_enhancement and image is not None:
+                print("\n[CLAHE ENHANCEMENT] Applying medical contrast enhancement...")
+                image = apply_clahe(image, clip_limit=3.0, tile_grid_size=(8, 8))
+                print("[CLAHE ENHANCEMENT] ✅ Enhancement applied successfully")
+
         except Exception as e:
             print(f"Error loading image: {e}")
             image = None
@@ -401,7 +411,7 @@ def get_model_display_name(model_name: str) -> str:
     names = {
         "gpt4": "🟢 GPT-4o-mini",
         "groq": "🔵 Llama 3.3 70B",
-        "mixtral": "🟣 Qwen 3 32B"
+        "qwen": "🟣 Qwen 3 32B"
     }
     return names.get(model_name, "🟢 GPT-4o-mini")
 
@@ -668,6 +678,13 @@ with gr.Blocks(css=custom_css, title="Dental AI Platform", theme=gr.themes.Soft(
                         clear_btn = gr.Button("🗑️ Clear", scale=1, size="lg")
                         send_btn = gr.Button("Send ➤", variant="primary", scale=2, size="lg")
 
+                    # CLAHE Enhancement Option
+                    clahe_checkbox = gr.Checkbox(
+                        label="🔍 Apply Medical Contrast Enhancement (CLAHE)",
+                        value=False,
+                        info="Enhance X-ray contrast to reveal subtle details like hidden impacted teeth or small cavities"
+                    )
+
             # Example questions
             gr.Examples(
                 examples=[
@@ -689,7 +706,7 @@ with gr.Blocks(css=custom_css, title="Dental AI Platform", theme=gr.themes.Soft(
                 return "groq", gr.update(variant="secondary"), gr.update(variant="primary"), gr.update(variant="secondary")
             
             def select_qwen():
-                return "mixtral", gr.update(variant="secondary"), gr.update(variant="secondary"), gr.update(variant="primary")
+                return "qwen", gr.update(variant="secondary"), gr.update(variant="secondary"), gr.update(variant="primary")
             
             gpt_btn.click(
                 fn=select_gpt,
@@ -718,16 +735,16 @@ with gr.Blocks(css=custom_css, title="Dental AI Platform", theme=gr.themes.Soft(
                 outputs=[chatbot, model_status]
             )
 
-            # Event handlers - UPDATED to include stored_annotated_images and selected_model
+            # Event handlers - UPDATED to include stored_annotated_images, selected_model, and CLAHE checkbox
             send_btn.click(
                 fn=process_chat_message,
-                inputs=[msg_input, image_upload, chatbot, conversation_state, stored_annotated_images, selected_model],
+                inputs=[msg_input, image_upload, chatbot, conversation_state, stored_annotated_images, selected_model, clahe_checkbox],
                 outputs=[chatbot, msg_input, image_upload, annotated_gallery, annotated_gallery, conversation_state, stored_annotated_images]
             )
 
             msg_input.submit(
                 fn=process_chat_message,
-                inputs=[msg_input, image_upload, chatbot, conversation_state, stored_annotated_images, selected_model],
+                inputs=[msg_input, image_upload, chatbot, conversation_state, stored_annotated_images, selected_model, clahe_checkbox],
                 outputs=[chatbot, msg_input, image_upload, annotated_gallery, annotated_gallery, conversation_state, stored_annotated_images]
             )
 

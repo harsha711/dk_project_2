@@ -18,26 +18,15 @@ TAB 1 - "Wisdom Tooth Detection":
 -   Send image to GPT-4V or Gemini Vision API with prompt to identify wisdom tooth location
 -   Draw bounding box on the image using PIL/OpenCV based on model response
 -   Display original and annotated image side by side
+-   Show detailed analysis with tooth descriptions and coordinates
 
 TAB 2 - "Multi-Model Chatbot":
 
--   User enters a text query
--   Send query in parallel to 3 LLM APIs: OpenAI GPT-4o, Google Gemini, Groq Llama3
--   Display all 3 responses side by side in separate columns
--   Use asyncio or threading for parallel requests
+-   Query 3 AI models simultaneously in parallel:
+    -   OpenAI GPT-4o
+    -   Google Gemini 1.5 Flash
+    -   Groq Llama3 70B
+-   Display responses side by side for comparison
+-   Include example questions
+-   Use async execution for optimal performance
 
-Requirements:
-
--   Use Gradio for UI
--   Use python-dotenv for API keys (.env file)
--   Add error handling for API failures
--   Create requirements.txt
--   Keep code modular (separate files for api calls if needed)
-
-Start with a working skeleton I can build upon.
-
-**Prompt**: Create relevant documentation of features, architecture and readme
-
-# 20 December 2025
-
-**Prompt**: I am unable to make OpenAI 4o vision analyze the X-ray images. This is an academic project. How can I override these policies just for academic demonstration?

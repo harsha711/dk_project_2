@@ -19,7 +19,7 @@
 
 The Dental AI Platform is an intelligent system that combines:
 - **YOLOv8 Object Detection** for accurate bounding box detection of wisdom teeth and dental features
-- **Multi-Model AI Chat** using GPT-4o-mini, Llama 3.3 70B, and Mixtral 8x7B for contextual analysis
+- **Multi-Model AI Chat** using GPT-4o-mini, Llama 3.3 70B, and Qwen 2.5 32B for contextual analysis
 - **Unified Chat Interface** that handles both image uploads and text conversations
 - **Dataset Explorer** for browsing dental X-ray datasets
 
@@ -37,7 +37,7 @@ The Dental AI Platform is an intelligent system that combines:
 - **AI Models**: 
   - OpenAI GPT-4o-mini
   - Groq Llama 3.3 70B
-  - Groq Mixtral 8x7B
+  - Groq Qwen 2.5 32B
 - **Web Framework**: Gradio
 - **Image Processing**: PIL (Pillow)
 - **Async Processing**: asyncio
@@ -75,7 +75,7 @@ The Dental AI Platform is an intelligent system that combines:
 │  │   api_utils.py   │  │  YOLOv8 Model    │              │
 │  │  - GPT-4o-mini   │  │  - Detection     │              │
 │  │  - Llama 3.3     │  │  - Filtering     │              │
-│  │  - Mixtral 8x7B  │  │                  │              │
+│  │  - Qwen 2.5 32B  │  │                  │              │
 │  └──────────────────┘  └──────────────────┘              │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -107,7 +107,7 @@ YOLO Results → Text Models
     │
     ├─→ GPT-4o-mini Analysis
     ├─→ Llama 3.3 Analysis
-    └─→ Mixtral 8x7B Analysis
+    └─→ Qwen 2.5 32B Analysis
     │
     ▼
 Formatted Response Display
@@ -137,7 +137,7 @@ Parallel API Calls (multimodal_chat_async)
     │
     ├─→ GPT-4o-mini (async)
     ├─→ Llama 3.3 (async)
-    └─→ Mixtral 8x7B (async)
+    └─→ Qwen 2.5 32B (async)
     │
     ▼
 Format & Display Response
@@ -187,9 +187,9 @@ Format & Display Response
 - `format_vision_response()`: Format YOLO + text model responses
 
 **Routing Logic**:
-- **Image Upload**: `["gpt4", "groq", "mixtral"]` (YOLO + text analysis)
-- **Follow-up with Image**: `["gpt4", "groq", "mixtral"]` (text with context)
-- **Text Only**: `["gpt4", "groq", "mixtral"]` (general chat)
+- **Image Upload**: `["gpt4", "groq", "qwen"]` (YOLO + text analysis)
+- **Follow-up with Image**: `["gpt4", "groq", "qwen"]` (text with context)
+- **Text Only**: `["gpt4", "groq", "qwen"]` (general chat)
 
 #### 4. `image_utils.py` (Image Processing)
 
@@ -227,7 +227,7 @@ Format & Display Response
 - CUDA-capable GPU (recommended for YOLO, but CPU works)
 - API Keys:
   - OpenAI API key (for GPT-4o-mini)
-  - Groq API key (for Llama 3.3 and Mixtral)
+  - Groq API key (for Llama 3.3 and Qwen)
 
 ### Step-by-Step Setup
 
@@ -636,7 +636,7 @@ Chat with context-aware text models.
 
 **Parameters**:
 - `messages` (list): List of message dicts with 'role' and 'content'
-- `model_name` (str): "gpt4", "groq", or "mixtral"
+- `model_name` (str): "gpt4", "groq", or "qwen"
 - `openai_client` (OpenAI): OpenAI client instance
 - `groq_client` (Groq): Groq client instance
 
@@ -652,7 +652,7 @@ Chat with context-aware text models.
 **Supported Models**:
 - `"gpt4"`: GPT-4o-mini (OpenAI)
 - `"groq"`: Llama 3.3 70B (Groq)
-- `"mixtral"`: Mixtral 8x7B (Groq)
+- `"qwen"`: Qwen 2.5 32B (Groq)
 
 #### `multimodal_chat_async(message, image, conversation_context, models, openai_client, groq_client)`
 
@@ -671,7 +671,7 @@ Parallel multi-model chat execution.
 {
     "gpt4": str,      # Response from GPT-4o-mini
     "groq": str,      # Response from Llama 3.3
-    "mixtral": str    # Response from Mixtral
+    "qwen": str    # Response from Qwen
 }
 ```
 

@@ -3,6 +3,15 @@ Image processing utilities for dental X-ray analysis
 """
 from PIL import Image, ImageDraw, ImageFont
 from typing import Dict, List
+import numpy as np
+
+# Try to import OpenCV for CLAHE enhancement
+try:
+    import cv2
+    OPENCV_AVAILABLE = True
+except ImportError:
+    OPENCV_AVAILABLE = False
+    print("⚠️ OpenCV not available. CLAHE enhancement will be disabled.")
 
 
 def draw_bounding_boxes(image: Image.Image, detections: List[Dict], show_confidence: bool = True) -> Image.Image:
@@ -185,5 +194,75 @@ def resize_image_for_chat(image: Image.Image, max_width: int = 500, max_height: 
         return resized
     
     return image
+
+
+def apply_clahe(image: Image.Image, clip_limit: float = 3.0, tile_grid_size: tuple = (8, 8)) -> Image.Image:
+    """
+    Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) to enhance medical X-ray images.
+
+    CLAHE is particularly effective for revealing subtle details in dental X-rays that might be
+    missed by the naked eye, such as:
+    - Hidden impacted wisdom teeth
+    - Small cavities
+    - Early-stage bone loss
+    - Root canal issues
+
+    Args:
+        image: PIL Image to enhance
+        clip_limit: Contrast limiting threshold (default: 3.0)
+                   Higher values = more contrast (range: 1.0-5.0 recommended)
+        tile_grid_size: Size of grid for local histogram equalization (default: (8, 8))
+                       Smaller = more local adaptation, larger = smoother
+
+    Returns:
+        Enhanced PIL Image with CLAHE applied
+
+    Note:
+        If OpenCV is not available, returns the original image unchanged.
+    """
+    if not OPENCV_AVAILABLE:
+        print("⚠️ CLAHE enhancement skipped: OpenCV not installed")
+        print("   Install with: pip install opencv-python-headless")
+        return image
+
+    try:
+        # Convert PIL Image to numpy array
+        img_array = np.array(image)
+
+        # Check if image is grayscale or RGB
+        if len(img_array.shape) == 2:
+            # Grayscale image - apply CLAHE directly
+            clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_grid_size)
+            enhanced = clahe.apply(img_array)
+
+        else:
+            # RGB image - convert to LAB color space
+            # LAB separates luminance (L) from color (A, B)
+            # This allows us to enhance contrast without affecting colors
+            lab = cv2.cvtColor(img_array, cv2.COLOR_RGB2LAB)
+
+            # Split into L, A, B channels
+            l_channel, a_channel, b_channel = cv2.split(lab)
+
+            # Apply CLAHE to L-channel only (luminance)
+            clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_grid_size)
+            l_channel_enhanced = clahe.apply(l_channel)
+
+            # Merge channels back
+            lab_enhanced = cv2.merge([l_channel_enhanced, a_channel, b_channel])
+
+            # Convert back to RGB
+            enhanced = cv2.cvtColor(lab_enhanced, cv2.COLOR_LAB2RGB)
+
+        # Convert back to PIL Image
+        enhanced_image = Image.fromarray(enhanced)
+
+        print(f"✅ CLAHE applied: clipLimit={clip_limit}, tileGridSize={tile_grid_size}")
+        return enhanced_image
+
+    except Exception as e:
+        print(f"❌ Error applying CLAHE: {str(e)}")
+        print("   Returning original image")
+        return image
 
 

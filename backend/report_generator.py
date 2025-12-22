@@ -3,6 +3,7 @@ Professional PDF Report Generator for Dental AI Analysis
 Creates clinical-grade reports from AI analysis results
 """
 import os
+import re
 import tempfile
 import uuid
 from datetime import datetime
@@ -22,6 +23,63 @@ from reportlab.lib.utils import ImageReader
 
 
 # ============ HELPER FUNCTIONS ============
+
+def markdown_to_html(text: str) -> str:
+    """Convert markdown syntax to HTML for ReportLab Paragraph
+    
+    Converts:
+    - ### Header → <b><font size="12">Header</font></b>
+    - ## Header → <b><font size="14">Header</font></b>
+    - # Header → <b><font size="16">Header</font></b>
+    - **bold** → <b>bold</b>
+    - *italic* → <i>italic</i>
+    - Numbered lists (1. item) → <b>1.</b> item
+    - Bullet points (- item) → • item
+    - \n → <br/>
+    """
+    if not text:
+        return ""
+    
+    # Split into lines to process headers and lists line by line
+    lines = text.split('\n')
+    processed_lines = []
+    
+    for line in lines:
+        # Convert markdown headers (must be done before other conversions)
+        # ### Header (h3) - smaller bold
+        if re.match(r'^###\s+(.+)$', line):
+            line = re.sub(r'^###\s+(.+)$', r'<b><font size="12">\1</font></b>', line)
+        # ## Header (h2) - medium bold
+        elif re.match(r'^##\s+(.+)$', line):
+            line = re.sub(r'^##\s+(.+)$', r'<b><font size="14">\1</font></b>', line)
+        # # Header (h1) - large bold
+        elif re.match(r'^#\s+(.+)$', line):
+            line = re.sub(r'^#\s+(.+)$', r'<b><font size="16">\1</font></b>', line)
+        # Numbered lists (1. item, 2. item, etc.)
+        elif re.match(r'^\s*\d+\.\s+(.+)$', line):
+            line = re.sub(r'^\s*(\d+\.)\s+(.+)$', r'<b>\1</b> \2', line)
+        # Bullet points (- item or * item)
+        elif re.match(r'^\s*[-*]\s+(.+)$', line):
+            line = re.sub(r'^\s*[-*]\s+(.+)$', r'• \1', line)
+        
+        processed_lines.append(line)
+    
+    # Join lines back
+    text = '\n'.join(processed_lines)
+    
+    # Convert markdown bold **text** to HTML <b>text</b>
+    # Use non-greedy matching to handle multiple bold sections
+    text = re.sub(r'\*\*([^*]+?)\*\*', r'<b>\1</b>', text)
+    
+    # Handle *italic* syntax (but be careful not to break existing HTML or **bold**)
+    # Only match single * that aren't part of ** and not at start of line (bullet points)
+    text = re.sub(r'(?<!\*)(?<!^)\*([^*\n]+?)\*(?!\*)', r'<i>\1</i>', text)
+    
+    # Convert newlines to <br/>
+    text = text.replace('\n', '<br/>')
+    
+    return text
+
 
 def get_tooth_number_fdi(position: str) -> str:
     """Convert position to FDI tooth notation"""
@@ -185,7 +243,7 @@ def generate_pdf_report(
         original_image: Original X-ray image
         annotated_image: Annotated image with bounding boxes (optional)
         detections: List of detection dictionaries with class, position, confidence
-        ai_analysis: Dictionary with model responses (gpt4, groq, mixtral)
+        ai_analysis: Dictionary with model responses (gpt4, groq, qwen)
         patient_info: Optional patient information dict
         output_path: Optional output file path (if None, creates temp file)
     
@@ -276,7 +334,9 @@ def generate_pdf_report(
         textColor=colors.HexColor('#2c3e50'),
         spaceAfter=6,
         alignment=TA_JUSTIFY,
-        leading=14
+        leading=14,
+        allowWidows=1,  # Allow text to break across pages
+        allowOrphans=1  # Allow orphans for long text
     )
     
     highlight_style = ParagraphStyle(
@@ -553,14 +613,15 @@ def generate_pdf_report(
         all_analyses.append(("GPT-4o-mini", ai_analysis["gpt4"]))
     if ai_analysis.get("groq"):
         all_analyses.append(("Llama 3.3 70B", ai_analysis["groq"]))
-    if ai_analysis.get("mixtral"):
-        all_analyses.append(("Qwen 3 32B", ai_analysis["mixtral"]))
+    if ai_analysis.get("qwen"):
+        all_analyses.append(("Qwen 3 32B", ai_analysis["qwen"]))
     
     if all_analyses:
         for model_name, analysis_text in all_analyses:
             story.append(Paragraph(f"{model_name} Analysis", subheading_style))
-            analysis_clean = analysis_text.replace("\n", "<br/>")
-            story.append(Paragraph(analysis_clean, body_style))
+            # Convert markdown to HTML for proper rendering
+            analysis_html = markdown_to_html(analysis_text)
+            story.append(Paragraph(analysis_html, body_style))
             story.append(Spacer(1, 0.15*inch))
     else:
         story.append(Paragraph("No AI analysis available.", body_style))
@@ -746,32 +807,3 @@ def generate_pdf_report(
             pass
     
     return output_path
-
-
-def extract_detections_from_state(conversation_state: List) -> Tuple[List[Dict], Optional[Image.Image], Optional[Image.Image]]:
-    """
-    Extract detection data from conversation state
-    
-    Returns:
-        (detections, original_image, annotated_image)
-    """
-    detections = []
-    original_image = None
-    annotated_image = None
-    
-    # Find most recent vision analysis
-    for entry in reversed(conversation_state):
-        if entry.get("role") == "assistant":
-            if entry.get("yolo_detections"):
-                detections = entry.get("yolo_detections", [])
-            if entry.get("original_image"):
-                original_image = entry.get("original_image")
-            if entry.get("annotated_image"):
-                annotated_image = entry.get("annotated_image")
-            if detections or original_image:
-                break
-        
-        if entry.get("role") == "user" and entry.get("image") and not original_image:
-            original_image = entry["image"]
-    
-    return detections, original_image, annotated_image
