@@ -977,21 +977,18 @@ with gr.Blocks(css=custom_css, title="Dental AI Platform", theme=gr.themes.Soft(
             dataset_info = gr.Markdown(value="Click 'Load Dataset' to start...")
 
             def load_hf_dataset():
-                result = dataset_manager.load_dataset()
+                # Use lazy loading - only load metadata
+                result = dataset_manager.load_metadata()
                 if result["success"]:
-                    stats = dataset_manager.get_dataset_stats()
-                    if stats["success"]:
-                        return f"""✅ **Dataset Loaded Successfully**
+                    return f"""✅ **Dataset Ready (Lazy Loading Enabled)**
 
-**Total Samples:** {stats['total_samples']}
-**Label 0 (images):** {stats['label_0_count']}
-**Label 1 (labels):** {stats['label_1_count']}
-**Image Size:** {stats['image_size']}
-**Dataset:** {stats['dataset_name']}
+**Total Samples:** {result['total_samples']}
+**Cache Size:** {result['cache_size']} images
+**Dataset:** RayanAi/Main_teeth_dataset
 
-Use the navigation buttons to explore samples!"""
-                    else:
-                        return result["message"]
+💡 **{result['tip']}**
+
+Use the navigation buttons to explore samples one at a time!"""
                 else:
                     return result["message"]
 
@@ -1007,20 +1004,42 @@ Use the navigation buttons to explore samples!"""
                     return None, f"❌ {result['error']}", index
 
             def next_sample(current_idx: int):
-                if dataset_manager.dataset is None:
-                    return None, "Load dataset first", 0
-                total = len(dataset_manager.dataset['train'])
-                next_idx = min(current_idx + 1, total - 1)
-                return browse_sample(next_idx)
+                if not dataset_manager.loaded:
+                    return None, "⚠️ Load dataset metadata first", 0
+                # Use lazy loading method
+                result = dataset_manager.get_next_sample(int(current_idx))
+                if result["success"]:
+                    info = f"""**Sample #{result['index']} of {result['total']}**
+
+**Label:** {result['label']}
+**Class:** {"images" if result['label'] == 0 else "labels"}
+**Cached:** {"Yes ✅" if result.get('cached', False) else "No (just loaded)"}"""
+                    return result['image'], info, result['index']
+                else:
+                    return None, f"❌ {result.get('error', 'Error loading sample')}", int(current_idx)
 
             def prev_sample(current_idx: int):
-                if dataset_manager.dataset is None:
-                    return None, "Load dataset first", 0
-                prev_idx = max(current_idx - 1, 0)
-                return browse_sample(prev_idx)
+                if not dataset_manager.loaded:
+                    return None, "⚠️ Load dataset metadata first", 0
+                # Use lazy loading method
+                result = dataset_manager.get_previous_sample(int(current_idx))
+                if result["success"]:
+                    info = f"""**Sample #{result['index']} of {result['total']}**
+
+**Label:** {result['label']}
+**Class:** {"images" if result['label'] == 0 else "labels"}
+**Cached:** {"Yes ✅" if result.get('cached', False) else "No (just loaded)"}"""
+                    return result['image'], info, result['index']
+                else:
+                    return None, f"❌ {result.get('error', 'Error loading sample')}", int(current_idx)
 
             def random_sample():
-                result = dataset_manager.get_random_sample()
+                if not dataset_manager.loaded:
+                    return None, "⚠️ Load dataset metadata first", 0
+                # Get random index
+                import random
+                random_idx = random.randint(0, dataset_manager.total_samples - 1)
+                result = dataset_manager.get_sample(random_idx)
                 if result["success"]:
                     info = f"""**Random Sample #{result['index']} of {result['total']}**
 
@@ -1028,7 +1047,7 @@ Use the navigation buttons to explore samples!"""
 **Class:** {"images" if result['label'] == 0 else "labels"}"""
                     return result['image'], info, result['index']
                 else:
-                    return None, f"❌ {result['error']}", 0
+                    return None, f"❌ {result.get('error', 'Error loading sample')}", 0
 
             load_dataset_btn.click(fn=load_hf_dataset, outputs=[dataset_info])
 
