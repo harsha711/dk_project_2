@@ -229,11 +229,30 @@ async def chat_with_context_async(
 
         print(f"[{model_name.upper()} CONTEXT] Sending {len(clean_messages)} messages")
 
-        # Debug: Show last message to verify YOLO context is included
+        # Debug: Show system prompt and last message to verify YOLO context is included
         if clean_messages and len(clean_messages) > 0:
+            # Check for system prompt
+            system_prompt_found = False
+            for msg in clean_messages:
+                if msg.get('role') == 'system':
+                    system_prompt_found = True
+                    sys_preview = msg.get('content', '')[:150] if isinstance(msg.get('content'), str) else str(msg.get('content'))[:150]
+                    print(f"  ✅ System prompt found: {sys_preview}...")
+                    break
+            if not system_prompt_found:
+                print(f"  ⚠️ No system prompt found in messages")
+            
+            # Show last message (should contain YOLO context for follow-ups)
             last_msg = clean_messages[-1]
-            preview = last_msg.get('content', '')[:200] if isinstance(last_msg.get('content'), str) else str(last_msg.get('content'))[:200]
+            preview = last_msg.get('content', '')[:300] if isinstance(last_msg.get('content'), str) else str(last_msg.get('content'))[:300]
             print(f"  Last message preview: {preview}...")
+            
+            # Check if YOLO context is present
+            last_content = last_msg.get('content', '') if isinstance(last_msg.get('content'), str) else str(last_msg.get('content'))
+            if 'YOLO' in last_content or 'detection' in last_content.lower() or 'X-RAY ANALYSIS CONTEXT' in last_content:
+                print(f"  ✅ YOLO context detected in last message")
+            else:
+                print(f"  ⚠️ YOLO context NOT detected in last message")
 
         if model_name == "gpt4":
             response = await loop.run_in_executor(

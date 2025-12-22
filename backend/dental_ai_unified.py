@@ -121,7 +121,17 @@ def process_chat_message(
         # YOLO DETECTION FIRST (for initial vision analysis only)
         yolo_detections = None
         yolo_summary = None
+        
+        # Check if we need to run YOLO (new image) or retrieve previous YOLO results (follow-up)
+        previous_yolo_detections = None
+        for entry in reversed(conversation_state):
+            if entry.get("role") == "assistant" and entry.get("yolo_detections"):
+                previous_yolo_detections = entry.get("yolo_detections", [])
+                print(f"[YOLO CONTEXT] Found previous YOLO detections: {len(previous_yolo_detections)} detections")
+                break
+        
         if mode == "vision" and current_image:
+            # New image - run YOLO detection
             print("\n[YOLO DETECTION] Running YOLOv8 for accurate bounding box detection...")
             # Using default thresholds with class-specific filtering and spatial validation
             yolo_result = detect_teeth_yolo(current_image)
@@ -138,23 +148,41 @@ def process_chat_message(
                     confidence = det.get('confidence', 0)
                     detection_details.append(f"{class_name} at {position} ({confidence:.0%} confidence)")
 
-                yolo_summary = f"""YOLO Object Detection Results:
+                yolo_summary = f"""YOLO Object Detection Results (from X-ray analysis):
 - Total detections: {len(yolo_detections)}
 - Findings: {', '.join(detection_details)}
 
-Based on these YOLO detections, please provide a brief clinical analysis (2-3 sentences) about:
+Based on these YOLO detections from the X-ray, please provide a clinical analysis about:
 1. What these findings indicate about the dental condition
 2. Any concerns or recommendations
-3. Suggested follow-up actions"""
+3. Suggested follow-up actions
 
+IMPORTANT: These detection results are from actual X-ray analysis. Use them to answer questions about severity, position, and condition."""
                 print(f"  📝 YOLO summary created for text model analysis")
             else:
                 print(f"  ⚠️ YOLO detection failed or found no teeth: {yolo_result.get('summary', 'Unknown error')}")
                 yolo_summary = f"YOLO Detection: {yolo_result.get('summary', 'No teeth detected')}"
+        elif previous_yolo_detections and current_image:
+            # Follow-up question - use previous YOLO results
+            print(f"\n[YOLO CONTEXT] Using previous YOLO detections for follow-up question")
+            detection_details = []
+            for det in previous_yolo_detections:
+                class_name = det.get('class_name', 'unknown')
+                position = det.get('position', 'unknown')
+                confidence = det.get('confidence', 0)
+                detection_details.append(f"{class_name} at {position} ({confidence:.0%} confidence)")
+            
+            yolo_summary = f"""X-RAY ANALYSIS CONTEXT (from previous analysis):
+The user is asking a follow-up question about the X-ray that was previously analyzed. Here are the YOLO detection results from that X-ray:
+
+- Total detections: {len(previous_yolo_detections)}
+- Findings: {', '.join(detection_details)}
+
+IMPORTANT: Use these detection results to answer the user's question. These are actual findings from the X-ray analysis. Do NOT say you cannot see the X-ray - these results ARE the X-ray analysis. Reference specific detections when answering questions about severity, position, impaction, or condition."""
 
         # Modify context to include YOLO results for text models
         analysis_context = context.copy()
-        if yolo_summary and mode == "vision":
+        if yolo_summary:
             # Add YOLO results to the last user message for text model analysis
             if analysis_context and analysis_context[-1]['role'] == 'user':
                 original_content = analysis_context[-1]['content']
@@ -322,7 +350,60 @@ If the error persists, try:
 
 def clear_conversation():
     """Clear conversation history and state"""
-    return [], "", [], [], gr.update(visible=False), []  # Also clear stored images
+    return [], "", [], gr.update(visible=False), [], [], "gpt4"  # Also clear stored images and reset model
+
+def update_model_selection(model_name: str, history: List, conversation_state: List):
+    """Update ALL displayed responses based on selected model"""
+    if not conversation_state or len(conversation_state) == 0:
+        return history, f"**Selected:** {get_model_display_name(model_name)}"
+    
+    # Create a mapping of conversation_state entries to history indices
+    updated_history = history.copy()
+    
+    # Collect all assistant entries from conversation_state (in order)
+    assistant_entries_in_state = []
+    for entry in conversation_state:
+        if entry.get("role") == "assistant" and "model_responses" in entry:
+            assistant_entries_in_state.append(entry)
+    
+    # Find all assistant messages in history (in order)
+    assistant_indices_in_history = []
+    for i, msg in enumerate(updated_history):
+        if isinstance(msg, dict) and msg.get("role") == "assistant":
+            assistant_indices_in_history.append(i)
+    
+    # Update ALL assistant responses in history
+    # Match by position: first assistant in state -> first assistant in history, etc.
+    from multimodal_utils import format_multi_model_response, format_vision_response
+    
+    for idx, state_entry in enumerate(assistant_entries_in_state):
+        if idx < len(assistant_indices_in_history):
+            history_idx = assistant_indices_in_history[idx]
+            responses = state_entry.get("model_responses", {})
+            
+            # Check if this was a vision response (has annotated_image)
+            if state_entry.get("annotated_image"):
+                formatted = format_vision_response(responses, None, model_name)
+            else:
+                formatted = format_multi_model_response(responses, model_name)
+            
+            # Update the history entry while preserving files (images) and other properties
+            current_msg = updated_history[history_idx]
+            updated_history[history_idx] = {
+                **current_msg,
+                "content": formatted
+            }
+    
+    return updated_history, f"**Selected:** {get_model_display_name(model_name)}"
+
+def get_model_display_name(model_name: str) -> str:
+    """Get display name for model"""
+    names = {
+        "gpt4": "🟢 GPT-4o-mini",
+        "groq": "🔵 Llama 3.3 70B",
+        "mixtral": "🟣 Qwen 3 32B"
+    }
+    return names.get(model_name, "🟢 GPT-4o-mini")
 
 
 # ============ GRADIO UI ============
@@ -524,7 +605,7 @@ with gr.Blocks(css=custom_css, title="Dental AI Platform", theme=gr.themes.Soft(
             gr.Markdown("""
             ### Chat with our AI dental assistants about wisdom teeth
             **Upload an X-ray** for analysis or **ask questions** about wisdom teeth.
-            Multiple AI models will respond simultaneously for comparison.
+            Select which AI model's response you want to view using the buttons below.
             
             📌 **Note:** After uploading an X-ray, you can ask follow-up questions and the annotated image will stay visible!
             """)
@@ -534,6 +615,18 @@ with gr.Blocks(css=custom_css, title="Dental AI Platform", theme=gr.themes.Soft(
             
             # NEW: Store annotated images persistently
             stored_annotated_images = gr.State([])
+            
+            # Model selection state
+            selected_model = gr.State("gpt4")
+
+            # Model selection buttons
+            gr.Markdown("### 🤖 Select AI Model")
+            with gr.Row():
+                gpt_btn = gr.Button("🟢 GPT-4o-mini", variant="primary", size="lg")
+                llama_btn = gr.Button("🔵 Llama 3.3 70B", variant="secondary", size="lg")
+                qwen_btn = gr.Button("🟣 Qwen 3 32B", variant="secondary", size="lg")
+            
+            model_status = gr.Markdown("**Selected:** 🟢 GPT-4o-mini", elem_classes=["model-status"])
 
             # Chat display
             chatbot = gr.Chatbot(
@@ -588,22 +681,65 @@ with gr.Blocks(css=custom_css, title="Dental AI Platform", theme=gr.themes.Soft(
                 label="💡 Example Questions"
             )
 
-            # Event handlers - UPDATED to include stored_annotated_images
+            # Model selection button handlers
+            def select_gpt():
+                return "gpt4", gr.update(variant="primary"), gr.update(variant="secondary"), gr.update(variant="secondary")
+            
+            def select_llama():
+                return "groq", gr.update(variant="secondary"), gr.update(variant="primary"), gr.update(variant="secondary")
+            
+            def select_qwen():
+                return "mixtral", gr.update(variant="secondary"), gr.update(variant="secondary"), gr.update(variant="primary")
+            
+            gpt_btn.click(
+                fn=select_gpt,
+                outputs=[selected_model, gpt_btn, llama_btn, qwen_btn]
+            ).then(
+                fn=update_model_selection,
+                inputs=[selected_model, chatbot, conversation_state],
+                outputs=[chatbot, model_status]
+            )
+            
+            llama_btn.click(
+                fn=select_llama,
+                outputs=[selected_model, gpt_btn, llama_btn, qwen_btn]
+            ).then(
+                fn=update_model_selection,
+                inputs=[selected_model, chatbot, conversation_state],
+                outputs=[chatbot, model_status]
+            )
+            
+            qwen_btn.click(
+                fn=select_qwen,
+                outputs=[selected_model, gpt_btn, llama_btn, qwen_btn]
+            ).then(
+                fn=update_model_selection,
+                inputs=[selected_model, chatbot, conversation_state],
+                outputs=[chatbot, model_status]
+            )
+
+            # Event handlers - UPDATED to include stored_annotated_images and selected_model
             send_btn.click(
                 fn=process_chat_message,
-                inputs=[msg_input, image_upload, chatbot, conversation_state, stored_annotated_images],
+                inputs=[msg_input, image_upload, chatbot, conversation_state, stored_annotated_images, selected_model],
                 outputs=[chatbot, msg_input, image_upload, annotated_gallery, annotated_gallery, conversation_state, stored_annotated_images]
             )
 
             msg_input.submit(
                 fn=process_chat_message,
-                inputs=[msg_input, image_upload, chatbot, conversation_state, stored_annotated_images],
+                inputs=[msg_input, image_upload, chatbot, conversation_state, stored_annotated_images, selected_model],
                 outputs=[chatbot, msg_input, image_upload, annotated_gallery, annotated_gallery, conversation_state, stored_annotated_images]
             )
 
             clear_btn.click(
                 fn=clear_conversation,
-                outputs=[chatbot, msg_input, conversation_state, stored_annotated_images, annotated_gallery, stored_annotated_images]
+                outputs=[chatbot, msg_input, annotated_gallery, annotated_gallery, conversation_state, stored_annotated_images, selected_model]
+            ).then(
+                fn=lambda: ("gpt4", gr.update(variant="primary"), gr.update(variant="secondary"), gr.update(variant="secondary")),
+                outputs=[selected_model, gpt_btn, llama_btn, qwen_btn]
+            ).then(
+                fn=lambda: "**Selected:** 🟢 GPT-4o-mini",
+                outputs=[model_status]
             )
 
             # ============ REPORT GENERATION ============
