@@ -27,6 +27,7 @@ from multimodal_utils import (
     SYSTEM_PROMPT
 )
 from report_generator import generate_pdf_report
+from annotation_playground import create_playground_tab
 
 # Load environment variables
 load_dotenv()
@@ -67,6 +68,17 @@ def process_chat_message(
     Returns:
         (updated_history, cleared_message, cleared_image, annotated_images_list, gallery_update, updated_conversation_state, updated_stored_images)
     """
+    # Extract filename early for use throughout the function
+    image_filename = None
+    if image_file is not None:
+        try:
+            if isinstance(image_file, str):
+                image_filename = os.path.basename(image_file)
+            elif hasattr(image_file, 'name'):
+                image_filename = os.path.basename(image_file.name)
+        except:
+            pass
+    
     # Convert file to PIL Image if provided
     image = None
     if image_file is not None:
@@ -82,6 +94,7 @@ def process_chat_message(
         except Exception as e:
             print(f"Error loading image: {e}")
             image = None
+            image_filename = None
     
     # Handle empty message with no image
     if (not message or not message.strip()) and not image:
@@ -262,7 +275,11 @@ IMPORTANT: Use these detection results to answer the user's question. These are 
             if image_to_display:
                 resized_user_image = resize_image_for_chat(image_to_display, max_width=500, max_height=400)
                 print(f"[DISPLAY] ✅ Adding image to user message (size: {resized_user_image.size})")
-                history.append({"role": "user", "content": message, "files": [resized_user_image]})
+                # Include filename in message if available
+                display_message = message
+                if image_filename:
+                    display_message = f"📎 **File:** `{image_filename}`\n\n{message}" if message else f"📎 **Uploaded:** `{image_filename}`"
+                history.append({"role": "user", "content": display_message, "files": [resized_user_image]})
             else:
                 print(f"[DISPLAY] ⚠️ No image to display in vision mode")
                 history.append({"role": "user", "content": message})
@@ -312,7 +329,11 @@ IMPORTANT: Use these detection results to answer the user's question. These are 
             if image_to_display:
                 resized_image = resize_image_for_chat(image_to_display, max_width=500, max_height=400)
                 print(f"[DISPLAY] ✅ Adding image to user message (size: {resized_image.size})")
-                history.append({"role": "user", "content": message, "files": [resized_image]})
+                # Include filename in message if available
+                display_message = message
+                if image_filename:
+                    display_message = f"📎 **File:** `{image_filename}`\n\n{message}" if message else f"📎 **Uploaded:** `{image_filename}`"
+                history.append({"role": "user", "content": display_message, "files": [resized_image]})
                 history.append({"role": "assistant", "content": formatted_response, "files": [resized_image]})
             else:
                 print(f"[DISPLAY] ⚠️ No image to display in text-only mode")
@@ -908,7 +929,17 @@ with gr.Blocks(css=custom_css, title="Dental AI Platform", theme=gr.themes.Soft(
                     
                     # If we have stored images but no annotated_image, use the first stored image
                     if not annotated_image and stored_images and len(stored_images) > 0:
-                        annotated_image = stored_images[0][0] if isinstance(stored_images[0], tuple) else stored_images[0]
+                        try:
+                            first_item = stored_images[0]
+                            if isinstance(first_item, tuple) and len(first_item) > 0:
+                                annotated_image = first_item[0]
+                            elif isinstance(first_item, Image.Image):
+                                annotated_image = first_item
+                            else:
+                                print(f"[WARNING] Unexpected stored_images format: {type(first_item)}")
+                        except (IndexError, TypeError) as e:
+                            print(f"[WARNING] Could not extract annotated image from stored_images: {e}")
+                            annotated_image = None
                     
                     if not original_image:
                         return None, "❌ **No X-ray image found.**\n\nPlease upload an X-ray and run analysis first."
@@ -1151,10 +1182,13 @@ Use the navigation buttons to explore samples one at a time!"""
                 outputs=[chatbot, annotated_gallery, annotated_gallery, conversation_state, stored_annotated_images, analyze_status, analysis_output, analysis_gallery, analysis_gallery]
             )
 
+        # ============ TAB 3: ANNOTATION PLAYGROUND ============
+        create_playground_tab(dataset_manager)
+
     # Footer
     gr.Markdown("""
     ---
-    **Dental AI Platform v2.3** | Multi-Model Chatbot + YOLO Detection | Powered by GPT-4o-mini, Llama 3.3 70B, Qwen 3 32B, and YOLOv8
+    **Dental AI Platform v2.4** | Multi-Model Chatbot + YOLO Detection + Annotation Playground | Powered by GPT-4o-mini, Llama 3.3 70B, Qwen 3 32B, and YOLOv8
     """)
 
 
@@ -1172,6 +1206,10 @@ if __name__ == "__main__":
     print("  ✅ Tab 2: Dataset Explorer (1,206 samples)")
     print("     - Browse HuggingFace dental X-ray dataset")
     print("     - One-click AI analysis on any sample")
+    print("  ✅ Tab 3: Annotation Playground")
+    print("     - Test your diagnostic skills")
+    print("     - Click-based annotation (no external libraries)")
+    print("     - Compare with AI and get scored")
     print("="*60 + "\n")
 
     demo.launch(

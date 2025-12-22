@@ -250,6 +250,26 @@ def generate_pdf_report(
     Returns:
         Path to generated PDF file
     """
+    # Validate inputs
+    if original_image is None:
+        raise ValueError("original_image cannot be None")
+    
+    if not isinstance(original_image, Image.Image):
+        raise TypeError(f"original_image must be PIL.Image, got {type(original_image)}")
+    
+    # Ensure detections is a list
+    if detections is None:
+        detections = []
+    elif not isinstance(detections, list):
+        print(f"[WARNING] detections is not a list: {type(detections)}, converting to list")
+        detections = list(detections) if hasattr(detections, '__iter__') else []
+    
+    # Ensure ai_analysis is a dict
+    if ai_analysis is None:
+        ai_analysis = {}
+    elif not isinstance(ai_analysis, dict):
+        print(f"[WARNING] ai_analysis is not a dict: {type(ai_analysis)}, using empty dict")
+        ai_analysis = {}
     # Create output file if not provided
     if output_path is None:
         temp_dir = tempfile.gettempdir()
@@ -514,12 +534,23 @@ def generate_pdf_report(
         row_colors = []
         
         for idx, detection in enumerate(detections, 1):
-            class_name = detection.get("class_name", detection.get("description", "Unknown"))
+            # Safely extract detection data with defaults
+            if not isinstance(detection, dict):
+                print(f"[WARNING] Detection {idx} is not a dict: {type(detection)}")
+                continue
+                
+            class_name = detection.get("class_name") or detection.get("description") or "Unknown"
             position = detection.get("position", "N/A")
-            confidence = detection.get("confidence", 0.0)
-            tooth_num = get_tooth_number_fdi(position)
-            severity, priority = calculate_severity(class_name, confidence)
-            action = get_recommended_action(class_name, severity)
+            confidence = float(detection.get("confidence", 0.0))
+            
+            # Ensure confidence is valid
+            if not isinstance(confidence, (int, float)) or confidence < 0 or confidence > 1:
+                confidence = 0.5  # Default to medium confidence
+                print(f"[WARNING] Invalid confidence value for detection {idx}, using 0.5")
+            
+            tooth_num = get_tooth_number_fdi(str(position))
+            severity, priority = calculate_severity(str(class_name), confidence)
+            action = get_recommended_action(str(class_name), severity)
             
             # Color code severity
             severity_color = colors.HexColor('#27ae60')  # Green
@@ -591,9 +622,19 @@ def generate_pdf_report(
         ]
         
         # Add color coding for severity and priority columns for each row
-        for row_idx, (severity_color, priority_color) in enumerate(row_colors, start=1):
-            table_style_commands.append(('TEXTCOLOR', (3, row_idx), (3, row_idx), severity_color))  # Severity column
-            table_style_commands.append(('TEXTCOLOR', (6, row_idx), (6, row_idx), priority_color))  # Priority column
+        # Ensure row_colors matches the number of data rows (excluding header)
+        num_data_rows = len(findings_data) - 1  # Subtract header row
+        
+        if len(row_colors) == num_data_rows:
+            for row_idx, color_tuple in enumerate(row_colors, start=1):
+                if row_idx < len(findings_data) and isinstance(color_tuple, (tuple, list)) and len(color_tuple) >= 2:
+                    severity_color, priority_color = color_tuple[0], color_tuple[1]
+                    table_style_commands.append(('TEXTCOLOR', (3, row_idx), (3, row_idx), severity_color))  # Severity column
+                    table_style_commands.append(('TEXTCOLOR', (6, row_idx), (6, row_idx), priority_color))  # Priority column
+                else:
+                    print(f"[WARNING] Skipping color coding for row {row_idx}: invalid color data")
+        else:
+            print(f"[WARNING] Mismatch: {len(row_colors)} colors for {num_data_rows} data rows - skipping color coding")
         
         findings_table.setStyle(TableStyle(table_style_commands))
         

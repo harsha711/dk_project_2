@@ -6,6 +6,7 @@ from datasets import load_dataset, IterableDataset
 from typing import Dict, Optional
 from PIL import Image
 from collections import OrderedDict
+import numpy as np
 
 
 class TeethDatasetManager:
@@ -85,15 +86,69 @@ class TeethDatasetManager:
             # Get single sample
             sample = self.dataset[index]
 
-            # DEBUG: Print image type from dataset
+            # Get image - try to preserve original as much as possible
             raw_img = sample['image']
             print(f"[DATASET] Image type from HF: {type(raw_img)}")
             if hasattr(raw_img, 'mode'):
                 print(f"[DATASET] Image mode: {raw_img.mode}, size: {raw_img.size}")
+            
+            # If it's already a valid PIL Image, minimize processing
+            if isinstance(raw_img, Image.Image):
+                # Quick validation - check if it's not corrupted
+                if raw_img.size[0] > 0 and raw_img.size[1] > 0:
+                    # Only convert mode if necessary, preserve original data
+                    processed_img = raw_img
+                    
+                    # Convert to RGB only if needed for display
+                    if processed_img.mode not in ('RGB', 'L', 'P'):
+                        try:
+                            processed_img = processed_img.convert('RGB')
+                            print(f"[IMAGE] Converted from {raw_img.mode} to RGB")
+                        except Exception as e:
+                            print(f"[WARNING] Could not convert {raw_img.mode} to RGB: {e}")
+                            # Try processing through full pipeline
+                            processed_img = self._process_image(raw_img)
+                    elif processed_img.mode == 'L':
+                        # Grayscale - convert to RGB for consistency
+                        processed_img = processed_img.convert('RGB')
+                        print(f"[IMAGE] Converted grayscale to RGB")
+                    elif processed_img.mode == 'P':
+                        # Palette mode - convert to RGB
+                        processed_img = processed_img.convert('RGB')
+                        print(f"[IMAGE] Converted palette to RGB")
+                    else:
+                        # Already RGB or acceptable mode
+                        print(f"[IMAGE] Keeping original mode: {processed_img.mode}")
+                else:
+                    print(f"[ERROR] Image has invalid size: {raw_img.size}")
+                    processed_img = None
+            else:
+                # Not a PIL Image - need full processing
+                processed_img = self._process_image(raw_img)
+            
+            if processed_img is None:
+                print(f"[WARNING] Sample {index} has invalid image, trying next...")
+                # Try next sample if current one is invalid (up to 5 attempts)
+                max_attempts = 5
+                for attempt in range(1, max_attempts + 1):
+                    next_index = (index + attempt) % self.total_samples
+                    if next_index != index:  # Don't loop back to same index
+                        print(f"[RETRY] Attempting sample {next_index} (attempt {attempt}/{max_attempts})")
+                        return self.get_sample(next_index)
+                
+                # If all attempts failed, return error
+                return {
+                    "success": False,
+                    "error": f"Sample {index} and next {max_attempts} samples have invalid images",
+                    "image": None,
+                    "label": None,
+                    "index": index,
+                    "total": self.total_samples
+                }
 
             result = {
                 "success": True,
-                "image": sample['image'],
+                "image": processed_img,
                 "label": sample['label'],
                 "index": index,
                 "total": self.total_samples,
@@ -116,6 +171,137 @@ class TeethDatasetManager:
                 "index": index,
                 "total": self.total_samples
             }
+
+    def _process_image(self, img) -> Optional[Image.Image]:
+        """
+        Process and validate image from dataset
+        Handles various formats and ensures proper display
+        
+        Args:
+            img: Image from dataset (PIL Image or other format)
+        
+        Returns:
+            Processed PIL Image in RGB mode, or None if invalid
+        """
+        try:
+            # Ensure it's a PIL Image
+            if not isinstance(img, Image.Image):
+                if hasattr(img, 'convert'):
+                    img = img.convert('RGB')
+                else:
+                    # Try to convert from numpy array or other format
+                    if isinstance(img, np.ndarray):
+                        # Normalize if needed
+                        if img.dtype != np.uint8:
+                            # Normalize to 0-255 range
+                            img_min, img_max = img.min(), img.max()
+                            if img_max > img_min:
+                                img = ((img - img_min) / (img_max - img_min) * 255).astype(np.uint8)
+                            else:
+                                img = img.astype(np.uint8)
+                        
+                        # Handle grayscale vs RGB
+                        if len(img.shape) == 2:
+                            img = Image.fromarray(img, mode='L')
+                        elif len(img.shape) == 3:
+                            img = Image.fromarray(img, mode='RGB')
+                        else:
+                            print(f"[ERROR] Unsupported image shape: {img.shape}")
+                            return None
+                    else:
+                        print(f"[ERROR] Unsupported image type: {type(img)}")
+                        return None
+            
+            # Validate image is not empty or corrupted
+            if img.size[0] == 0 or img.size[1] == 0:
+                print(f"[ERROR] Image has zero size")
+                return None
+            
+            # Convert to RGB if needed (handles grayscale, palette, etc.)
+            if img.mode == 'L':
+                # Grayscale - convert to RGB by duplicating channels
+                img = img.convert('RGB')
+            elif img.mode == 'P':
+                # Palette mode - convert to RGB
+                img = img.convert('RGB')
+            elif img.mode == 'RGBA':
+                # RGBA - convert to RGB (drop alpha)
+                background = Image.new('RGB', img.size, (255, 255, 255))
+                background.paste(img, mask=img.split()[3])  # Use alpha channel as mask
+                img = background
+            elif img.mode != 'RGB':
+                # Any other mode - try to convert
+                try:
+                    img = img.convert('RGB')
+                except Exception as e:
+                    print(f"[ERROR] Failed to convert image mode {img.mode}: {e}")
+                    return None
+            
+            # Validate image is not corrupted
+            img_array = np.array(img)
+            
+            # For X-rays, validation needs to be different:
+            # - X-rays can have very few colors (black background, white structures)
+            # - Check for actual structure/variance rather than just color count
+            mean_brightness = img_array.mean()
+            std_brightness = img_array.std()
+            min_brightness = img_array.min()
+            max_brightness = img_array.max()
+            
+            # Check if image is all black (mean < 5) or all white (mean > 250) - definitely corrupted
+            if mean_brightness < 5:
+                print(f"[ERROR] Image is all black (mean={mean_brightness:.1f}) - appears corrupted")
+                return None
+            if mean_brightness > 250:
+                print(f"[ERROR] Image is all white (mean={mean_brightness:.1f}) - appears corrupted")
+                return None
+            
+            # Check for static noise or completely uniform images
+            # X-rays should have some variance (std > 5) to show structure
+            if std_brightness < 5:
+                # Very low variance - might be uniform/corrupted
+                # But allow if it's a valid grayscale range (not all one value)
+                if max_brightness - min_brightness < 10:
+                    print(f"[ERROR] Image has no variance (std={std_brightness:.1f}, range={max_brightness-min_brightness:.1f}) - appears corrupted")
+                    return None
+            
+            # Count unique colors for logging (but don't reject based on this for X-rays)
+            if len(img_array.shape) == 3:
+                # RGB image - count unique RGB tuples
+                unique_colors = len(np.unique(img_array.reshape(-1, img_array.shape[-1]), axis=0))
+            else:
+                # Grayscale - count unique intensity values
+                unique_colors = len(np.unique(img_array))
+            
+            # For X-rays, even 2 colors (black/white) can be valid
+            # Only reject if it's truly uniform (all same value)
+            if unique_colors == 1:
+                print(f"[ERROR] Image has only 1 unique color - appears corrupted")
+                return None
+            
+            # Log info for very few colors (but allow it for X-rays)
+            if unique_colors < 10:
+                print(f"[INFO] Image has {unique_colors} unique colors (X-ray may be binary/grayscale - this is OK)")
+            
+            # Check for static noise (very high standard deviation with random patterns)
+            # Real X-rays have structured patterns, noise is random
+            # If std is very high (>100) and unique colors is very high (>5000), might be noise
+            # But we'll be lenient here since some X-rays can have high variance
+            
+            # For very dark X-rays (which are valid), log info
+            # X-rays are typically dark, so we'll allow dark images
+            if mean_brightness < 50:
+                # Very dark image - might need enhancement, but it's valid
+                print(f"[INFO] Image is dark (mean={mean_brightness:.1f}) - valid X-ray, may need enhancement")
+            
+            print(f"[IMAGE PROCESS] Processed image: mode={img.mode}, size={img.size}")
+            return img
+            
+        except Exception as e:
+            print(f"[ERROR] Failed to process image: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return None
 
     def _add_to_cache(self, index: int, data: Dict):
         """
