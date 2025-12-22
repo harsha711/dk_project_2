@@ -525,6 +525,112 @@ custom_css = """
 .modal-close-btn:hover {
     color: #ff6b6b;
 }
+
+/* ========== ENHANCED BUTTON STYLING ========== */
+
+/* Model selection buttons */
+button[class*="primary"] {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+    border: none !important;
+    box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4) !important;
+    transition: all 0.3s ease !important;
+}
+
+button[class*="primary"]:hover {
+    transform: translateY(-2px) !important;
+    box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6) !important;
+}
+
+button[class*="secondary"] {
+    background: linear-gradient(135deg, #434343 0%, #000000 100%) !important;
+    border: 1px solid #666 !important;
+    transition: all 0.3s ease !important;
+}
+
+button[class*="secondary"]:hover {
+    background: linear-gradient(135deg, #555 0%, #333 100%) !important;
+    border-color: #888 !important;
+    transform: translateY(-1px) !important;
+}
+
+/* Send button special styling */
+button:has-text("Send") {
+    background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%) !important;
+    font-weight: 600 !important;
+}
+
+/* Clear button */
+button:has-text("Clear"), button:has-text("🗑️") {
+    background: linear-gradient(135deg, #ff6b6b 0%, #ee5a6f 100%) !important;
+    border: none !important;
+}
+
+button:has-text("Clear"):hover, button:has-text("🗑️"):hover {
+    background: linear-gradient(135deg, #ff5252 0%, #dd4a5a 100%) !important;
+}
+
+/* Generate report button */
+button:has-text("Generate") {
+    background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%) !important;
+    font-weight: 600 !important;
+}
+
+/* Load dataset button */
+button:has-text("Load Dataset") {
+    background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%) !important;
+}
+
+/* Navigation buttons in dataset explorer */
+button:has-text("Previous"), button:has-text("Next"), button:has-text("Random") {
+    background: linear-gradient(135deg, #fa709a 0%, #fee140 100%) !important;
+    border: none !important;
+}
+
+/* All buttons - general improvements */
+button {
+    border-radius: 8px !important;
+    font-size: 14px !important;
+    padding: 10px 20px !important;
+    cursor: pointer !important;
+    transition: all 0.3s ease !important;
+}
+
+button:active {
+    transform: scale(0.98) !important;
+}
+
+/* File upload component */
+.file-upload {
+    border: 2px dashed #667eea !important;
+    border-radius: 8px !important;
+    transition: all 0.3s ease !important;
+}
+
+.file-upload:hover {
+    border-color: #764ba2 !important;
+    background: rgba(102, 126, 234, 0.05) !important;
+}
+
+/* Checkbox styling */
+input[type="checkbox"] {
+    width: 18px !important;
+    height: 18px !important;
+    cursor: pointer !important;
+}
+
+/* Model status indicator */
+.model-status {
+    background: linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%);
+    padding: 12px 20px;
+    border-radius: 8px;
+    border-left: 4px solid #667eea;
+    margin: 10px 0;
+}
+
+/* Hide the file input completely */
+#hidden-file-input {
+    display: none !important;
+}
 """
 
 # Build the Gradio app with dark theme
@@ -668,13 +774,16 @@ with gr.Blocks(css=custom_css, title="Dental AI Platform", theme=gr.themes.Soft(
                         show_label=False
                     )
 
+                    # Hidden file input (triggered by button)
+                    image_upload = gr.File(
+                        file_types=["image"],
+                        file_count="single",
+                        type="filepath",
+                        elem_id="hidden-file-input"
+                    )
+
                     with gr.Row():
-                        image_upload = gr.File(
-                            label="📎 X-Ray",
-                            file_types=["image"],
-                            file_count="single",
-                            scale=1
-                        )
+                        upload_btn = gr.Button("📎 Upload X-Ray", variant="secondary", size="lg", scale=1)
                         clear_btn = gr.Button("🗑️ Clear", scale=1, size="lg")
                         send_btn = gr.Button("Send ➤", variant="primary", scale=2, size="lg")
 
@@ -733,6 +842,17 @@ with gr.Blocks(css=custom_css, title="Dental AI Platform", theme=gr.themes.Soft(
                 fn=update_model_selection,
                 inputs=[selected_model, chatbot, conversation_state],
                 outputs=[chatbot, model_status]
+            )
+
+            # Upload button triggers hidden file input
+            upload_btn.click(
+                fn=None,
+                js="""() => {
+                    const fileInput = document.querySelector('#hidden-file-input input[type="file"]');
+                    if (fileInput) {
+                        fileInput.click();
+                    }
+                }"""
             )
 
             # Event handlers - UPDATED to include stored_annotated_images, selected_model, and CLAHE checkbox

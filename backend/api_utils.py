@@ -287,11 +287,11 @@ async def chat_with_context_async(
             }
 
         elif model_name == "qwen":
-            # Use Qwen 2.5 32B as third model
+            # Use Qwen 3 32B as third model
             response = await loop.run_in_executor(
                 None,
                 lambda: groq_client.chat.completions.create(
-                    model="qwen/qwen-2.5-32b-instruct",  # Qwen 2.5 32B
+                    model="qwen/qwen3-32b",  # Qwen 3 32B
                     messages=clean_messages,
                     max_tokens=2000,  # Increased for complete responses
                     temperature=0.7
