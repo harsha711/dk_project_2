@@ -26,6 +26,7 @@ from multimodal_utils import (
     format_multi_model_response,
     SYSTEM_PROMPT
 )
+from report_generator import generate_pdf_report
 
 # Load environment variables
 load_dotenv()
@@ -44,7 +45,8 @@ def process_chat_message(
     image_file,  # Now receives file path from gr.File
     history: List,
     conversation_state: List,
-    stored_annotated_images: List  # NEW: Store annotated images persistently
+    stored_annotated_images: List,  # NEW: Store annotated images persistently
+    selected_model: str = "gpt4"  # Selected model for display
 ) -> Tuple[List, str, None, List, dict, List, List]:
     """
     Process user message and return updated chat history
@@ -190,6 +192,7 @@ Based on these YOLO detections, please provide a brief clinical analysis (2-3 se
             annotated_list = []
 
             # Create annotated image from YOLO detections
+            yolo_annotated = None
             if yolo_detections:
                 print(f"  🎨 Creating annotated image with {len(yolo_detections)} YOLO detections")
                 yolo_annotated = draw_bounding_boxes(current_image, yolo_detections, show_confidence=True)
@@ -199,13 +202,16 @@ Based on these YOLO detections, please provide a brief clinical analysis (2-3 se
 
             # Format vision response with annotated images
             from multimodal_utils import format_vision_response
-            formatted_response = format_vision_response(responses, annotated_images)
+            formatted_response = format_vision_response(responses, annotated_images, selected_model)
 
-            # Add assistant response to conversation state
+            # Add assistant response to conversation state (with detection data for report generation)
             assistant_entry = {
                 "role": "assistant",
                 "model_responses": responses,
-                "timestamp": time.time()
+                "timestamp": time.time(),
+                "yolo_detections": yolo_detections if yolo_detections else [],  # Store for report generation
+                "original_image": current_image,  # Store original image
+                "annotated_image": yolo_annotated  # Store annotated image
             }
             conversation_state.append(assistant_entry)
 
@@ -249,7 +255,7 @@ Based on these YOLO detections, please provide a brief clinical analysis (2-3 se
                 return history, "", None, stored_annotated_images, gr.update(visible=gallery_visible), conversation_state, stored_annotated_images
         else:
             # Text-only responses - use standard formatting
-            formatted_response = format_multi_model_response(responses)
+            formatted_response = format_multi_model_response(responses, selected_model)
 
             # Add assistant response to conversation state
             assistant_entry = {
@@ -600,6 +606,87 @@ with gr.Blocks(css=custom_css, title="Dental AI Platform", theme=gr.themes.Soft(
                 outputs=[chatbot, msg_input, conversation_state, stored_annotated_images, annotated_gallery, stored_annotated_images]
             )
 
+            # ============ REPORT GENERATION ============
+            gr.Markdown("---\n### 📄 Generate Clinical Report")
+            
+            def generate_report_pdf(conv_state, stored_images):
+                """Generate PDF report from conversation state"""
+                try:
+                    # Find most recent analysis with detections
+                    original_image = None
+                    annotated_image = None
+                    detections = []
+                    ai_analysis = {}
+                    
+                    # Search backwards through conversation state
+                    for entry in reversed(conv_state):
+                        if entry.get("role") == "assistant":
+                            # Check if this entry has detection data
+                            if "yolo_detections" in entry:
+                                detections = entry.get("yolo_detections", [])
+                                original_image = entry.get("original_image")
+                                annotated_image = entry.get("annotated_image")
+                                ai_analysis = entry.get("model_responses", {})
+                                break
+                        
+                        # Also check for user image
+                        if entry.get("role") == "user" and entry.get("image") and not original_image:
+                            original_image = entry["image"]
+                    
+                    # If we have stored images but no annotated_image, use the first stored image
+                    if not annotated_image and stored_images and len(stored_images) > 0:
+                        annotated_image = stored_images[0][0] if isinstance(stored_images[0], tuple) else stored_images[0]
+                    
+                    if not original_image:
+                        return None, "❌ **No X-ray image found.**\n\nPlease upload an X-ray and run analysis first."
+                    
+                    # Generate PDF
+                    pdf_path = generate_pdf_report(
+                        original_image=original_image,
+                        annotated_image=annotated_image,
+                        detections=detections,
+                        ai_analysis=ai_analysis,
+                        patient_info=None  # Can be extended to accept patient info
+                    )
+                    
+                    return pdf_path, f"✅ **Report Generated Successfully!**\n\n📄 **File:** `{os.path.basename(pdf_path)}`\n\nClick the download button below to save the report."
+                    
+                except Exception as e:
+                    import traceback
+                    error_msg = f"❌ **Error generating report:**\n\n```\n{str(e)}\n```"
+                    print(f"[REPORT ERROR] {error_msg}")
+                    print(traceback.format_exc())
+                    return None, error_msg
+            
+            with gr.Row():
+                generate_report_btn = gr.Button(
+                    "📄 Generate PDF Report",
+                    variant="primary",
+                    size="lg"
+                )
+            
+            report_status = gr.Markdown(
+                value="💡 **Tip:** Upload an X-ray, run analysis, then click 'Generate PDF Report' to create a professional clinical report.",
+                elem_classes=["report-status"]
+            )
+            
+            report_file = gr.File(
+                label="📥 Download PDF Report",
+                visible=False,
+                file_types=[".pdf"],
+                interactive=False
+            )
+            
+            generate_report_btn.click(
+                fn=generate_report_pdf,
+                inputs=[conversation_state, stored_annotated_images],
+                outputs=[report_file, report_status]
+            ).then(
+                fn=lambda path: gr.update(visible=True, value=path) if path else gr.update(visible=False),
+                inputs=[report_file],
+                outputs=[report_file]
+            )
+
         # ============ TAB 2: DATASET EXPLORER ============
         with gr.Tab("📊 Dataset Explorer"):
             gr.Markdown("""
@@ -775,7 +862,7 @@ Use the navigation buttons to explore samples!"""
     # Footer
     gr.Markdown("""
     ---
-    **Dental AI Platform v2.3** | Multi-Model Chatbot + YOLO Detection | Powered by GPT-4o-mini, Llama 3.3, Mixtral 8x7B, and YOLOv8
+    **Dental AI Platform v2.3** | Multi-Model Chatbot + YOLO Detection | Powered by GPT-4o-mini, Llama 3.3 70B, Qwen 3 32B, and YOLOv8
     """)
 
 
@@ -799,5 +886,6 @@ if __name__ == "__main__":
         server_name="0.0.0.0",
         server_port=7860,
         share=False,
-        show_error=True
+        show_error=True,
+        inbrowser=False  # Set to True to auto-open browser
     )

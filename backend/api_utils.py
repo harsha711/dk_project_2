@@ -268,17 +268,18 @@ async def chat_with_context_async(
             }
 
         elif model_name == "mixtral":
+            # Use Qwen 3 32B as third model
             response = await loop.run_in_executor(
                 None,
                 lambda: groq_client.chat.completions.create(
-                    model="mixtral-8x7b-32768",
+                    model="qwen/qwen3-32b",  # Qwen 3 32B
                     messages=clean_messages,
                     max_tokens=800,
                     temperature=0.7
                 )
             )
             return {
-                "model": "mixtral",
+                "model": "mixtral",  # Keep name for compatibility
                 "response": response.choices[0].message.content,
                 "success": True
             }

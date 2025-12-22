@@ -4,7 +4,7 @@ Handles message routing, context building, and response formatting
 
 YOLO + Text Models:
 - YOLOv8 for accurate bounding box detection
-- GPT-4o-mini, Llama 3.3, and Mixtral 8x7B for text analysis
+- GPT-4o-mini, Llama 3.3 70B, and Qwen 3 32B for text analysis
 """
 from typing import Dict, List, Optional, Tuple
 from PIL import Image
@@ -155,39 +155,49 @@ def build_conversation_context(
     return messages
 
 
-def format_multi_model_response(responses: Dict[str, str]) -> str:
+def format_multi_model_response(responses: Dict[str, str], selected_model: str = "gpt4") -> str:
     """
-    Format multiple model responses for display in chatbot
+    Format model response for display in chatbot (single model based on selection)
 
     Args:
         responses: Dict mapping model names to response strings
+        selected_model: Which model to display ("gpt4", "groq", or "mixtral")
 
     Returns:
         Formatted markdown string
     """
-    gpt4 = responses.get('gpt4', 'No response')
-    groq = responses.get('groq', 'No response')
-    mixtral = responses.get('mixtral', 'No response')
+    model_info = {
+        "gpt4": {
+            "name": "GPT-4o-mini",
+            "color": "#667eea",
+            "emoji": "🟢",
+            "key": "gpt4"
+        },
+        "groq": {
+            "name": "Llama 3.3 70B",
+            "color": "#95E1D3",
+            "emoji": "🔵",
+            "key": "groq"
+        },
+        "mixtral": {
+            "name": "Qwen 3 32B",
+            "color": "#F093FB",
+            "emoji": "🟣",
+            "key": "mixtral"
+        }
+    }
+    
+    # Default to gpt4 if invalid selection
+    if selected_model not in model_info:
+        selected_model = "gpt4"
+    
+    info = model_info[selected_model]
+    response_text = responses.get(info["key"], 'No response available')
+    
+    formatted = f"""### 🤖 {info['emoji']} {info['name']}
 
-    formatted = f"""### 🤖 AI Responses
-
-<div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px;">
-
-<div style="border: 2px solid #667eea; border-radius: 8px; padding: 12px;">
-<h4 style="margin-top: 0; color: #667eea;">🟢 GPT-4o-mini</h4>
-{gpt4}
-</div>
-
-<div style="border: 2px solid #95E1D3; border-radius: 8px; padding: 12px;">
-<h4 style="margin-top: 0; color: #95E1D3;">🔵 Llama 3.3 70B</h4>
-{groq}
-</div>
-
-<div style="border: 2px solid #F093FB; border-radius: 8px; padding: 12px;">
-<h4 style="margin-top: 0; color: #F093FB;">🟣 Mixtral 8x7B</h4>
-{mixtral}
-</div>
-
+<div style="border: 2px solid {info['color']}; border-radius: 8px; padding: 15px; background: rgba(255, 255, 255, 0.05);">
+{response_text}
 </div>
 """
 
@@ -196,7 +206,8 @@ def format_multi_model_response(responses: Dict[str, str]) -> str:
 
 def format_vision_response(
     responses: Dict[str, str],
-    annotated_images: Optional[Dict[str, Image.Image]] = None
+    annotated_images: Optional[Dict[str, Image.Image]] = None,
+    selected_model: str = "gpt4"
 ) -> str:
     """
     Format YOLO detection + text model analysis responses
@@ -205,19 +216,43 @@ def format_vision_response(
     Args:
         responses: Dict mapping model names to response text strings
         annotated_images: Dict mapping model names to annotated images
+        selected_model: Which model to display ("gpt4", "groq", or "mixtral")
 
     Returns:
         Formatted markdown string with images
     """
-    # Extract text model responses (GPT-4, Groq, and Mixtral analyze YOLO results)
-    gpt4_text = responses.get('gpt4', '')
-    groq_text = responses.get('groq', '')
-    mixtral_text = responses.get('mixtral', '')
+    model_info = {
+        "gpt4": {
+            "name": "GPT-4o-mini",
+            "color": "#667eea",
+            "emoji": "🟢",
+            "key": "gpt4"
+        },
+        "groq": {
+            "name": "Llama 3.3 70B",
+            "color": "#95E1D3",
+            "emoji": "🔵",
+            "key": "groq"
+        },
+        "mixtral": {
+            "name": "Qwen 3 32B",
+            "color": "#F093FB",
+            "emoji": "🟣",
+            "key": "mixtral"
+        }
+    }
+    
+    # Default to gpt4 if invalid selection
+    if selected_model not in model_info:
+        selected_model = "gpt4"
+    
+    info = model_info[selected_model]
+    response_text = responses.get(info["key"], 'No response available')
 
-    has_text_models = bool(gpt4_text or groq_text or mixtral_text)
+    has_text_models = bool(response_text)
 
     if has_text_models:
-        # YOLO detection + text model analysis (works for both initial and follow-up)
+        # YOLO detection + selected text model analysis
         formatted = f"""### 🦷 Dental Analysis
 
 <div style="border: 2px solid #FF6B6B; border-radius: 8px; padding: 12px; margin-bottom: 15px;">
@@ -225,23 +260,9 @@ def format_vision_response(
 <p>Accurate bounding box detection using trained dental AI model. See annotated X-ray below.</p>
 </div>
 
-<div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px;">
-
-<div style="border: 2px solid #667eea; border-radius: 8px; padding: 12px;">
-<h4 style="margin-top: 0; color: #667eea;">🟢 GPT-4o-mini</h4>
-{gpt4_text if gpt4_text else 'No response'}
-</div>
-
-<div style="border: 2px solid #95E1D3; border-radius: 8px; padding: 12px;">
-<h4 style="margin-top: 0; color: #95E1D3;">🔵 Llama 3.3 70B</h4>
-{groq_text if groq_text else 'No response'}
-</div>
-
-<div style="border: 2px solid #F093FB; border-radius: 8px; padding: 12px;">
-<h4 style="margin-top: 0; color: #F093FB;">🟣 Mixtral 8x7B</h4>
-{mixtral_text if mixtral_text else 'No response'}
-</div>
-
+<div style="border: 2px solid {info['color']}; border-radius: 8px; padding: 15px; background: rgba(255, 255, 255, 0.05);">
+<h4 style="margin-top: 0; color: {info['color']};">{info['emoji']} {info['name']}</h4>
+{response_text}
 </div>
 """
     else:

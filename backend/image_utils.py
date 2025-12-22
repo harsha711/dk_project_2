@@ -103,20 +103,52 @@ def draw_bounding_boxes(image: Image.Image, detections: List[Dict], show_confide
             label = f"{position}: {description}"
 
         # Use textbbox for better text positioning
-        text_bbox = draw.textbbox((x_min, y_min - 25), label, font=font_small)
+        text_bbox = draw.textbbox((0, 0), label, font=font_small)
         text_width = text_bbox[2] - text_bbox[0]
         text_height = text_bbox[3] - text_bbox[1]
+        
+        # Padding for text box
+        text_padding = 10
+        label_box_width = text_width + text_padding * 2
+        label_box_height = text_height + text_padding * 2
+
+        # Determine label position to avoid cutoff
+        # Try above first, then below, then inside if needed
+        label_x = x_min
+        label_y = y_min - label_box_height - 5  # Above box
+        
+        # Check if label would be cut off at top
+        if label_y < 0:
+            # Place below box instead
+            label_y = y_max + 5
+            # Check if label would be cut off at bottom
+            if label_y + label_box_height > height:
+                # Place inside box at top
+                label_y = y_min + 5
+        
+        # Check if label would be cut off on right edge
+        if label_x + label_box_width > width:
+            # Move label left to fit
+            label_x = width - label_box_width - 5
+            # If still doesn't fit, place it at the left edge
+            if label_x < 0:
+                label_x = 5
+        
+        # Check if label would be cut off on left edge
+        if label_x < 0:
+            label_x = 5
 
         # Draw background rectangle for text
         draw.rectangle(
-            [(x_min, y_min - text_height - 30), (x_min + text_width + 10, y_min - 5)],
+            [(label_x, label_y), (label_x + label_box_width, label_y + label_box_height)],
             fill=color,
-            outline=color
+            outline=(0, 0, 0),  # Black outline for better visibility
+            width=1
         )
 
         # Draw text
         draw.text(
-            (x_min + 5, y_min - text_height - 25),
+            (label_x + text_padding, label_y + text_padding),
             label,
             fill="black",
             font=font_small
