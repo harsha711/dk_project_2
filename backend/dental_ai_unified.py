@@ -390,7 +390,15 @@ If the error persists, try:
 
 def clear_conversation():
     """Clear conversation history and state"""
-    return [], "", [], gr.update(visible=False), [], [], "gpt4"  # Also clear stored images and reset model
+    return [], "", [], gr.update(visible=False), [], [], "gpt4", ""  # Also clear stored images, reset model, and clear filename
+
+def display_filename(file_path):
+    """Display the uploaded filename"""
+    if file_path:
+        import os
+        filename = os.path.basename(file_path)
+        return f"📎 **Uploaded:** `{filename}`"
+    return ""
 
 def update_model_selection(model_name: str, history: List, conversation_state: List):
     """Update ALL displayed responses based on selected model"""
@@ -648,6 +656,25 @@ input[type="checkbox"] {
     cursor: pointer !important;
 }
 
+/* Filename display */
+.filename-display {
+    color: #667eea !important;
+    font-size: 13px !important;
+    padding: 6px 12px !important;
+    background: rgba(102, 126, 234, 0.1) !important;
+    border-radius: 6px !important;
+    margin-top: 8px !important;
+    margin-bottom: 8px !important;
+}
+
+.filename-display code {
+    background: rgba(102, 126, 234, 0.15) !important;
+    padding: 2px 8px !important;
+    border-radius: 4px !important;
+    color: #5a67d8 !important;
+    font-family: monospace !important;
+}
+
 /* Model status indicator */
 .model-status {
     background: linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%);
@@ -812,6 +839,9 @@ with gr.Blocks(css=custom_css, title="Dental AI Platform", theme=gr.themes.Soft(
                         elem_id="hidden-file-input"
                     )
 
+                    # Filename display
+                    filename_display = gr.Markdown("", elem_classes=["filename-display"])
+
                     with gr.Row():
                         upload_btn = gr.Button("📎 Upload X-Ray", variant="secondary", size="lg", scale=1)
                         clear_btn = gr.Button("🗑️ Clear", scale=1, size="lg")
@@ -885,6 +915,13 @@ with gr.Blocks(css=custom_css, title="Dental AI Platform", theme=gr.themes.Soft(
                 }"""
             )
 
+            # Update filename display when file is uploaded
+            image_upload.change(
+                fn=display_filename,
+                inputs=[image_upload],
+                outputs=[filename_display]
+            )
+
             # Event handlers - UPDATED to include stored_annotated_images, selected_model, and CLAHE checkbox
             send_btn.click(
                 fn=process_chat_message,
@@ -900,7 +937,7 @@ with gr.Blocks(css=custom_css, title="Dental AI Platform", theme=gr.themes.Soft(
 
             clear_btn.click(
                 fn=clear_conversation,
-                outputs=[chatbot, msg_input, annotated_gallery, annotated_gallery, conversation_state, stored_annotated_images, selected_model]
+                outputs=[chatbot, msg_input, annotated_gallery, annotated_gallery, conversation_state, stored_annotated_images, selected_model, filename_display]
             ).then(
                 fn=lambda: ("gpt4", gr.update(variant="primary"), gr.update(variant="secondary"), gr.update(variant="secondary")),
                 outputs=[selected_model, gpt_btn, llama_btn, qwen_btn]
@@ -1223,9 +1260,9 @@ if __name__ == "__main__":
     print("="*60 + "\n")
 
     demo.launch(
-        server_name="0.0.0.0",
-        server_port=7860,
-        share=False,
-        show_error=True,
-        inbrowser=False  # Set to True to auto-open browser
+        # server_name="0.0.0.0",
+        # server_port=7860,
+        # share=False,
+        # show_error=True,
+        # inbrowser=False  # Set to True to auto-open browser
     )

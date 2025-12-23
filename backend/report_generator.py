@@ -26,7 +26,7 @@ from reportlab.lib.utils import ImageReader
 
 def markdown_to_html(text: str) -> str:
     """Convert markdown syntax to HTML for ReportLab Paragraph
-    
+
     Converts:
     - ### Header → <b><font size="12">Header</font></b>
     - ## Header → <b><font size="14">Header</font></b>
@@ -37,48 +37,67 @@ def markdown_to_html(text: str) -> str:
     - Bullet points (- item) → • item
     - \n → <br/>
     """
+    if not text or not isinstance(text, str):
+        return "No content available"
+
+    # Strip leading/trailing whitespace
+    text = text.strip()
     if not text:
-        return ""
-    
-    # Split into lines to process headers and lists line by line
-    lines = text.split('\n')
-    processed_lines = []
-    
-    for line in lines:
-        # Convert markdown headers (must be done before other conversions)
-        # ### Header (h3) - smaller bold
-        if re.match(r'^###\s+(.+)$', line):
-            line = re.sub(r'^###\s+(.+)$', r'<b><font size="12">\1</font></b>', line)
-        # ## Header (h2) - medium bold
-        elif re.match(r'^##\s+(.+)$', line):
-            line = re.sub(r'^##\s+(.+)$', r'<b><font size="14">\1</font></b>', line)
-        # # Header (h1) - large bold
-        elif re.match(r'^#\s+(.+)$', line):
-            line = re.sub(r'^#\s+(.+)$', r'<b><font size="16">\1</font></b>', line)
-        # Numbered lists (1. item, 2. item, etc.)
-        elif re.match(r'^\s*\d+\.\s+(.+)$', line):
-            line = re.sub(r'^\s*(\d+\.)\s+(.+)$', r'<b>\1</b> \2', line)
-        # Bullet points (- item or * item)
-        elif re.match(r'^\s*[-*]\s+(.+)$', line):
-            line = re.sub(r'^\s*[-*]\s+(.+)$', r'• \1', line)
-        
-        processed_lines.append(line)
-    
-    # Join lines back
-    text = '\n'.join(processed_lines)
-    
-    # Convert markdown bold **text** to HTML <b>text</b>
-    # Use non-greedy matching to handle multiple bold sections
-    text = re.sub(r'\*\*([^*]+?)\*\*', r'<b>\1</b>', text)
-    
-    # Handle *italic* syntax (but be careful not to break existing HTML or **bold**)
-    # Only match single * that aren't part of ** and not at start of line (bullet points)
-    text = re.sub(r'(?<!\*)(?<!^)\*([^*\n]+?)\*(?!\*)', r'<i>\1</i>', text)
-    
-    # Convert newlines to <br/>
-    text = text.replace('\n', '<br/>')
-    
-    return text
+        return "No content available"
+
+    try:
+        # Split into lines to process headers and lists line by line
+        lines = text.split('\n')
+        processed_lines = []
+
+        for line in lines:
+            # Skip completely empty lines but preserve them as spacing
+            if not line.strip():
+                processed_lines.append('')
+                continue
+
+            # Convert markdown headers (must be done before other conversions)
+            # ### Header (h3) - smaller bold
+            if re.match(r'^###\s+(.+)$', line):
+                line = re.sub(r'^###\s+(.+)$', r'<b><font size="12">\1</font></b>', line)
+            # ## Header (h2) - medium bold
+            elif re.match(r'^##\s+(.+)$', line):
+                line = re.sub(r'^##\s+(.+)$', r'<b><font size="14">\1</font></b>', line)
+            # # Header (h1) - large bold
+            elif re.match(r'^#\s+(.+)$', line):
+                line = re.sub(r'^#\s+(.+)$', r'<b><font size="16">\1</font></b>', line)
+            # Numbered lists (1. item, 2. item, etc.)
+            elif re.match(r'^\s*\d+\.\s+(.+)$', line):
+                line = re.sub(r'^\s*(\d+\.)\s+(.+)$', r'<b>\1</b> \2', line)
+            # Bullet points (- item or * item)
+            elif re.match(r'^\s*[-*]\s+(.+)$', line):
+                line = re.sub(r'^\s*[-*]\s+(.+)$', r'• \1', line)
+
+            processed_lines.append(line)
+
+        # Join lines back
+        text = '\n'.join(processed_lines)
+
+        # Convert markdown bold **text** to HTML <b>text</b>
+        # Use non-greedy matching to handle multiple bold sections
+        text = re.sub(r'\*\*([^*]+?)\*\*', r'<b>\1</b>', text)
+
+        # Handle *italic* syntax (but be careful not to break existing HTML or **bold**)
+        # Only match single * that aren't part of ** and not at start of line (bullet points)
+        text = re.sub(r'(?<!\*)(?<!^)\*([^*\n]+?)\*(?!\*)', r'<i>\1</i>', text)
+
+        # Convert newlines to <br/>
+        text = text.replace('\n', '<br/>')
+
+        # Ensure we return valid content
+        if not text.strip() or text.strip() in ['<br/>', '<br/>']:
+            return "No content available"
+
+        return text
+    except Exception as e:
+        print(f"[ERROR] markdown_to_html failed: {e}")
+        # Return safe fallback
+        return "Content processing error"
 
 
 def get_tooth_number_fdi(position: str) -> str:
@@ -660,9 +679,43 @@ def generate_pdf_report(
     if all_analyses:
         for model_name, analysis_text in all_analyses:
             story.append(Paragraph(f"{model_name} Analysis", subheading_style))
-            # Convert markdown to HTML for proper rendering
-            analysis_html = markdown_to_html(analysis_text)
-            story.append(Paragraph(analysis_html, body_style))
+
+            # Safety check for empty or None text
+            if not analysis_text or not isinstance(analysis_text, str) or not analysis_text.strip():
+                story.append(Paragraph(f"No {model_name} analysis available.", body_style))
+                story.append(Spacer(1, 0.15*inch))
+                continue
+
+            # Split into lines and create separate paragraphs to avoid ReportLab splitting issues
+            lines = analysis_text.strip().split('\n')
+
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    # Empty line = small spacing
+                    story.append(Spacer(1, 0.05*inch))
+                    continue
+
+                try:
+                    # Simple text cleanup - remove markdown symbols
+                    # Don't use complex HTML that might cause splitting errors
+                    line_clean = line.replace('**', '').replace('*', '')
+
+                    # Limit line length to prevent overflow issues
+                    max_len = 500
+                    if len(line_clean) > max_len:
+                        # Split very long lines into chunks
+                        chunks = [line_clean[i:i+max_len] for i in range(0, len(line_clean), max_len)]
+                        for chunk in chunks:
+                            if chunk.strip():
+                                story.append(Paragraph(chunk.strip(), body_style))
+                    else:
+                        story.append(Paragraph(line_clean, body_style))
+                except Exception as e:
+                    print(f"[WARNING] Failed to render line in {model_name} analysis: {e}")
+                    # Skip problematic lines silently
+                    continue
+
             story.append(Spacer(1, 0.15*inch))
     else:
         story.append(Paragraph("No AI analysis available.", body_style))
