@@ -1,4 +1,4 @@
-# 19 December 2025
+
 
 **Platform**: Claude
 
@@ -32,7 +32,59 @@ TAB 2 - "Multi-Model Chatbot":
 
 ---
 
-# December 2025
+**Prompt**: I'm having issues with GPT-4V and Gemini Vision - they're giving me bounding box coordinates but when I draw them, the boxes are in completely wrong locations. The models seem to be hallucinating coordinates. How can I verify if the coordinates are accurate?
+
+**Result**: Identified vision model hallucination issue:
+- Confirmed that vision models often produce inaccurate coordinates for medical imaging
+- Suggested validation approach to check coordinate accuracy
+- Recommended testing with known ground truth data
+- Result: Confirmed the need for a more accurate detection method
+
+---
+
+**Prompt**: The vision models keep giving inconsistent results - sometimes they detect wisdom teeth, sometimes they don't, and the coordinates are unreliable. What's a better approach for accurate object detection in X-rays?
+
+**Result**: Recommended YOLOv8 as solution:
+- Explained limitations of general-purpose vision models for medical imaging
+- Suggested custom-trained YOLO model for domain-specific accuracy
+- Provided guidance on training YOLO on dental X-ray datasets
+- Result: Decision to replace vision models with YOLO
+
+---
+
+**Prompt**: I want to create an interactive feature where users can click on X-rays to mark dental issues and compare their annotations with AI detections. How should I design this annotation playground?
+
+**Result**: Provided annotation playground design guidance:
+- Suggested Gradio Image component with click event handling
+- Recommended storing user clicks as normalized coordinates
+- Proposed comparison algorithm to match user marks with AI detections
+- Suggested scoring system (precision, recall) for educational feedback
+- Result: Designed interactive annotation playground feature
+
+---
+
+**Prompt**: How do I implement the click-to-annotate functionality in Gradio? I need users to click on the image and see markers appear.
+
+**Result**: Provided implementation guidance:
+- Explained `gr.SelectData` event handling for image clicks
+- Suggested storing click coordinates in state
+- Recommended PIL ImageDraw for drawing markers
+- Helped structure the click handler function
+- Result: Functional click-to-annotate feature
+
+---
+
+**Prompt**: For the annotation playground, how should I compare user clicks with AI detections? What's a fair way to calculate accuracy?
+
+**Result**: Provided comparison algorithm guidance:
+- Suggested distance-based matching (user click within threshold of detection center)
+- Recommended calculating precision and recall metrics
+- Explained how to handle multiple detections and multiple clicks
+- Helped structure the comparison function
+- Result: Fair and educational scoring system
+
+---
+
 
 
 **Prompt**: create one final consolidated document that has everything in it, remove only those docs that feel unnecessary
@@ -149,6 +201,110 @@ TAB 2 - "Multi-Model Chatbot":
   - Added "Smart Dataset Filtering" feature
   - Added "Local Dataset Support" feature
 - All documentation now reflects binary filtering, filepath display, and quality improvements
+
+---
+
+**Prompt**: Vision models are hallucinating coordinates. I need accurate detection - how should I approach this?
+
+**Result**: Suggested YOLOv8 integration for accurate object detection:
+- Recommended replacing vision models with custom-trained YOLO model
+- Provided guidance on training pipeline using Roboflow dataset
+- Suggested class-specific confidence thresholds and spatial filtering
+- Result: Achieved 88% mAP@50 accuracy with custom YOLO model
+
+---
+
+**Prompt**: How do I implement parallel async API calls for multiple AI models?
+
+**Result**: Provided async implementation guidance:
+- Explained `asyncio` patterns for parallel execution
+- Suggested response formatting approach for multi-model display
+- Helped structure the async function for GPT-4o-mini, Llama 3.3 70B, and Qwen 3 32B
+- Result: Successfully implemented parallel model execution
+
+---
+
+**Prompt**: How should I format and display responses from multiple models in the UI?
+
+**Result**: Suggested response formatting approach:
+- Recommended model selection UI with buttons
+- Provided structure for displaying responses side-by-side
+- Suggested conversation history management
+- Result: Clean multi-model comparison interface
+
+---
+
+**Prompt**: Historical responses don't update when I switch models. How can I fix this?
+
+**Result**: Provided solution for model selection consistency:
+- Suggested `update_model_selection()` function approach
+- Explained mapping between conversation state and display
+- Helped implement logic to update all historical responses
+- Result: Consistent model selection across entire conversation
+
+---
+
+**Prompt**: Annotated images are disappearing during follow-up questions. What's the best way to handle state management?
+
+**Result**: Provided state management guidance:
+- Suggested persistent image storage in conversation state
+- Explained how to maintain images across conversation turns
+- Helped structure state updates to preserve visual context
+- Result: Images now persist throughout conversation
+
+---
+
+**Prompt**: I'm getting context leakage - Qwen is accessing YOLO results from previous conversations even without a current image. How do I prevent this?
+
+**Result**: Provided context isolation solution:
+- Suggested updating system prompts with critical instructions
+- Explained how to properly build conversation context
+- Helped refine context building logic to prevent false inferences
+- Result: Proper context isolation preventing leakage
+
+---
+
+**Prompt**: How do I add comprehensive error handling for API failures and edge cases?
+
+**Result**: Provided error handling best practices:
+- Suggested try-catch blocks with detailed error messages
+- Recommended fallback mechanisms for missing model files
+- Helped structure user-friendly error messages
+- Result: Robust error handling throughout application
+
+---
+
+**Prompt**: How can I optimize the async API calls for better performance?
+
+**Result**: Provided optimization suggestions:
+- Suggested LRU caching for dataset images
+- Recommended reducing YOLO inference time
+- Helped identify bottlenecks in parallel execution
+- Result: Significant performance improvements
+
+---
+
+**Prompt**: I need to create a professional PDF report generation system. What approach would work best?
+
+**Result**: Provided PDF generation guidance:
+- Suggested using `reportlab` library
+- Recommended structure for clinical reports
+- Helped format YOLO detections and AI analysis in PDF
+- Result: Complete PDF report generation feature
+
+---
+
+**Prompt**: How do I fix the image dragging issue for the Annotation Playground?
+
+**Result**: Provided UI/UX fix suggestions:
+- Suggested CSS/JavaScript to prevent image dragging
+- Recommended fullscreen modal implementation
+- Helped improve cross-browser compatibility
+- Result: Improved user experience across browsers
+
+---
+
+
 
 ---
 
