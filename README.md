@@ -6,6 +6,12 @@ Combines YOLOv8 object detection with 3 text-based AI models to provide accurate
 
 ---
 
+<img width="2048" height="1120" alt="Screenshot from 2025-12-23 13-21-19" src="https://github.com/user-attachments/assets/38cb05bc-e5fa-4a69-a85c-86ebff585d8c" />
+<img width="2048" height="1120" alt="image" src="https://github.com/user-attachments/assets/cb05e299-88d7-42df-acc8-16b16b8be385" />
+
+
+
+
 ## 🎯 Key Features
 
 ✅ **Custom YOLO Detection** - Trained on 1,075 dental X-rays (88% mAP accuracy)  
