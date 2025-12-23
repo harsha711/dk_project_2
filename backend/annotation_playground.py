@@ -1,42 +1,175 @@
 """
 Annotation Playground - Test Your Diagnostic Skills
 Simple click-based annotation using only standard Gradio 6.x components
+Uses filepaths instead of PIL objects for Gradio display (fixes corruption issues)
 """
 from PIL import Image, ImageDraw, ImageFont
 from typing import Dict, Optional
 import random
+import tempfile
+import os
 from api_utils import detect_teeth_yolo
 from image_utils import draw_bounding_boxes
 from dataset_utils import TeethDatasetManager
 import gradio as gr
 
 
+def save_image_for_gradio(pil_image):
+    """Save PIL image to temp file and return path for Gradio display"""
+    if pil_image is None:
+        return None
+    
+    # Create temp file with unique name
+    temp_dir = tempfile.gettempdir()
+    import uuid
+    temp_path = os.path.join(temp_dir, f"dental_temp_{uuid.uuid4().hex[:8]}.png")
+    
+    # DEBUG: Check image before conversion
+    import numpy as np
+    arr_before = np.array(pil_image)
+    print(f"[DEBUG save_image_for_gradio] Before conversion:")
+    print(f"  - Mode: {pil_image.mode}")
+    print(f"  - Shape: {arr_before.shape}")
+    print(f"  - Min/Max: {arr_before.min()} / {arr_before.max()}")
+    print(f"  - Unique values: {len(np.unique(arr_before))}")
+    
+    # Ensure RGB mode - FIXED: Proper grayscale to RGB conversion
+    if pil_image.mode == 'L':
+        # Grayscale to RGB - preserve full range, don't threshold
+        # Method: Convert each grayscale pixel to RGB by duplicating the value
+        arr = np.array(pil_image)  # Shape: (H, W)
+        if len(arr.shape) == 2:
+            # Stack to create RGB: (H, W, 3)
+            arr_rgb = np.stack([arr, arr, arr], axis=-1)
+            pil_image = Image.fromarray(arr_rgb.astype(np.uint8), mode='RGB')
+        else:
+            # Fallback to PIL convert
+            pil_image = pil_image.convert('RGB')
+    elif pil_image.mode != 'RGB':
+        pil_image = pil_image.convert('RGB')
+    
+    # DEBUG: Check image after conversion
+    arr_after = np.array(pil_image)
+    print(f"[DEBUG save_image_for_gradio] After conversion:")
+    print(f"  - Mode: {pil_image.mode}")
+    print(f"  - Shape: {arr_after.shape}")
+    print(f"  - Min/Max: {arr_after.min()} / {arr_after.max()}")
+    print(f"  - Unique values: {len(np.unique(arr_after))}")
+    
+    # Save as PNG
+    pil_image.save(temp_path, format='PNG')
+    
+    # DEBUG: Verify saved image
+    verify_img = Image.open(temp_path)
+    verify_arr = np.array(verify_img)
+    print(f"[DEBUG save_image_for_gradio] Saved file verification:")
+    print(f"  - Mode: {verify_img.mode}")
+    print(f"  - Min/Max: {verify_arr.min()} / {verify_arr.max()}")
+    print(f"  - Unique values: {len(np.unique(verify_arr))}")
+    
+    return temp_path
+
+
+def load_uploaded_image(image_path, state: Dict):
+    """Load user-uploaded image for annotation practice"""
+    if image_path is None:
+        return None, None, state, "❌ Please upload an image first.", "**Stats:** Attempts: 0 | Avg Score: 0%"
+    
+    # Load from filepath
+    try:
+        image = Image.open(image_path)
+        image.load()  # Force load
+    except Exception as e:
+        return None, None, state, f"❌ Error loading image: {str(e)}", "**Stats:** Attempts: 0 | Avg Score: 0%"
+    
+    # Convert to RGB if needed - FIXED: Proper grayscale to RGB conversion
+    if image.mode == 'L':
+        # Grayscale to RGB - preserve full range, don't threshold
+        import numpy as np
+        arr = np.array(image)  # Shape: (H, W)
+        if len(arr.shape) == 2:
+            # Stack to create RGB: (H, W, 3)
+            arr_rgb = np.stack([arr, arr, arr], axis=-1)
+            image = Image.fromarray(arr_rgb.astype(np.uint8), mode='RGB')
+        else:
+            image = image.convert('RGB')
+    elif image.mode not in ("RGB", "L"):
+        try:
+            image = image.convert("RGB")
+        except Exception as e:
+            return None, None, state, f"❌ Error converting image: {str(e)}", "**Stats:** Attempts: 0 | Avg Score: 0%"
+    
+    # Reset state for new image (store PIL in state)
+    state["original_image"] = image.copy()
+    state["display_image"] = image.copy()
+    state["user_clicks"] = []
+    
+    avg_score_text = f"**Stats:** Attempts: {state['attempts']} | Avg Score: {state['total_score'] / state['attempts']:.0f}%" if state['attempts'] > 0 else "**Stats:** Attempts: 0 | Avg Score: 0%"
+    
+    # Return filepath for Gradio
+    filepath = save_image_for_gradio(image)
+    
+    return filepath, None, state, "*Image loaded! Click on dental issues you spot.*", avg_score_text
+
+
 def load_random_playground_image(state: Dict, dataset_manager: TeethDatasetManager):
-    """Load random X-ray for annotation practice"""
+    """Load random X-ray for annotation practice (from dataset - may be corrupted)"""
+    # Try to load from dataset, but show warning if dataset is corrupted
     if not dataset_manager.loaded:
-        # Load metadata if not already loaded
         dataset_manager.load_metadata()
     
     if dataset_manager.total_samples == 0:
-        return None, None, state, "❌ Dataset not loaded. Please load dataset in Dataset Explorer tab first.", "**Stats:** Attempts: 0 | Avg Score: 0%"
+        return None, None, state, "❌ Dataset not available. Please upload an image using the uploader above.", "**Stats:** Attempts: 0 | Avg Score: 0%"
     
     # Get random sample
     index = random.randint(0, dataset_manager.total_samples - 1)
     result = dataset_manager.get_sample(index)
     
     if not result.get("success"):
-        return None, None, state, f"❌ Error loading sample: {result.get('error', 'Unknown error')}", "**Stats:** Attempts: 0 | Avg Score: 0%"
+        return None, None, state, f"❌ Error loading sample: {result.get('error', 'Unknown error')}\n\n💡 **Tip:** Try uploading your own image using the uploader above.", "**Stats:** Attempts: 0 | Avg Score: 0%"
     
     image = result['image']
+    
+    # DEBUG: Print image info
+    print(f"\n[DEBUG] Original image from dataset:")
+    print(f"  - Type: {type(image)}")
+    print(f"  - Mode: {image.mode}")
+    print(f"  - Size: {image.size}")
+    
+    import numpy as np
+    arr = np.array(image)
+    print(f"  - Array shape: {arr.shape}")
+    print(f"  - Dtype: {arr.dtype}")
+    print(f"  - Min/Max: {arr.min()} / {arr.max()}")
+    print(f"  - Mean: {arr.mean():.1f}")
+    print(f"  - Unique values: {len(np.unique(arr))}")
+    
+    # Save original for comparison
+    try:
+        image.save("/tmp/debug_original.png")
+        print(f"  - Saved to /tmp/debug_original.png")
+    except Exception as e:
+        print(f"  - Failed to save debug image: {e}")
     
     # Preserve original image - only convert if absolutely necessary
     # The image should already be processed and in RGB mode from dataset_utils
     if not isinstance(image, Image.Image):
         return None, None, state, f"❌ Invalid image type: {type(image)}", "**Stats:** Attempts: 0 | Avg Score: 0%"
     
-    # Only convert to RGB if it's not already RGB or grayscale
-    # Grayscale can stay as-is or be converted, but preserve data integrity
-    if image.mode not in ("RGB", "L"):
+    # Convert to RGB if needed - FIXED: Proper grayscale to RGB conversion
+    if image.mode == 'L':
+        # Grayscale to RGB - preserve full range, don't threshold
+        import numpy as np
+        arr = np.array(image)  # Shape: (H, W)
+        if len(arr.shape) == 2:
+            # Stack to create RGB: (H, W, 3)
+            arr_rgb = np.stack([arr, arr, arr], axis=-1)
+            image = Image.fromarray(arr_rgb.astype(np.uint8), mode='RGB')
+            print(f"[PLAYGROUND] Converted grayscale to RGB (preserved full range)")
+        else:
+            image = image.convert('RGB')
+            print(f"[PLAYGROUND] Converted grayscale to RGB (fallback)")
+    elif image.mode not in ("RGB", "L"):
         try:
             # Convert non-RGB modes to RGB for display
             image = image.convert("RGB")
@@ -44,13 +177,8 @@ def load_random_playground_image(state: Dict, dataset_manager: TeethDatasetManag
         except Exception as e:
             print(f"[ERROR] Failed to convert image mode {image.mode}: {e}")
             return None, None, state, f"❌ Error converting image: {str(e)}", "**Stats:** Attempts: 0 | Avg Score: 0%"
-    elif image.mode == "L":
-        # Grayscale - convert to RGB for consistency with markers
-        image = image.convert("RGB")
-        print(f"[PLAYGROUND] Converted grayscale to RGB")
     
-    # Reset state for new image
-    # Store original separately from display image - use copy() to avoid reference issues
+    # Reset state for new image (store PIL in state)
     state["original_image"] = image.copy()  # Store unmarked original (never modified)
     state["display_image"] = image.copy()  # Display image (with markers)
     state["current_index"] = index
@@ -58,7 +186,10 @@ def load_random_playground_image(state: Dict, dataset_manager: TeethDatasetManag
     
     avg_score_text = f"**Stats:** Attempts: {state['attempts']} | Avg Score: {state['total_score'] / state['attempts']:.0f}%" if state['attempts'] > 0 else "**Stats:** Attempts: 0 | Avg Score: 0%"
     
-    return image, None, state, f"*Image #{index} loaded. Click on dental issues!*", avg_score_text
+    # Return filepath for Gradio
+    filepath = save_image_for_gradio(image)
+    
+    return filepath, None, state, f"*Image #{index} loaded. Click on dental issues!*", avg_score_text
 
 
 def handle_image_click(state: Dict, evt: gr.SelectData):
@@ -155,7 +286,10 @@ def handle_image_click(state: Dict, evt: gr.SelectData):
     # Update the display image (but keep original_image unchanged)
     state["display_image"] = image
     
-    return image, state, f"✓ Marked {len(state['user_clicks'])} area(s). Click more or press 'Compare with AI'!"
+    # Return filepath for Gradio
+    filepath = save_image_for_gradio(image)
+    
+    return filepath, state, f"✓ Marked {len(state['user_clicks'])} area(s). Click more or press 'Compare with AI'!"
 
 
 def clear_playground(state: Dict):
@@ -167,7 +301,10 @@ def clear_playground(state: Dict):
     state["display_image"] = original  # Reset display to original
     state["user_clicks"] = []
     
-    return original, state, "*Marks cleared. Click on the image to mark issues again.*"
+    # Return filepath for Gradio
+    filepath = save_image_for_gradio(original)
+    
+    return filepath, state, "*Marks cleared. Click on the image to mark issues again.*"
 
 
 def compare_with_ai(image, state: Dict):
@@ -265,7 +402,10 @@ def compare_with_ai(image, state: Dict):
     
     stats_text = f"**Stats:** Attempts: {state['attempts']} | Avg Score: {avg_score:.0f}%"
     
-    return ai_image, state, result_text, stats_text
+    # Return filepath for Gradio
+    ai_filepath = save_image_for_gradio(ai_image)
+    
+    return ai_filepath, state, result_text, stats_text
 
 
 def create_playground_tab(dataset_manager: TeethDatasetManager):
@@ -282,13 +422,26 @@ def create_playground_tab(dataset_manager: TeethDatasetManager):
         gr.Markdown("""
         ### Test Your Diagnostic Skills!
         **Instructions:** 
-        1. Click **🎲 Random X-Ray** to load an image
-        2. Click on areas where you see dental issues (wisdom teeth, cavities, etc.)
-        3. Click **✅ Compare with AI** to see how your marks compare with AI detection
-        4. Get a score and feedback!
+        1. **Upload an X-ray image** using the uploader below (recommended)
+        2. OR click **🎲 Random X-Ray** to try loading from dataset (may be unavailable)
+        3. Click on areas where you see dental issues (wisdom teeth, cavities, etc.)
+        4. Click **✅ Compare with AI** to see how your marks compare with AI detection
+        5. Get a score and feedback!
         
         💡 **Tip:** The more accurate your clicks, the higher your score!
+        
+        ⚠️ **Note:** The HuggingFace dataset appears to be corrupted. Please upload your own X-ray images for best results.
         """)
+        
+        # Image upload component (can still use pil for upload, we'll convert)
+        with gr.Row():
+            image_upload = gr.Image(
+                label="📤 Upload X-Ray Image",
+                type="filepath",  # Changed to filepath for consistency
+                height=200,
+                show_label=True
+            )
+            upload_btn = gr.Button("📥 Load Uploaded Image", variant="primary", size="lg")
 
         # State management for playground
         # Separate original_image (never modified) from display_image (with markers)
@@ -302,7 +455,7 @@ def create_playground_tab(dataset_manager: TeethDatasetManager):
         })
 
         with gr.Row():
-            random_btn = gr.Button("🎲 Random X-Ray", variant="primary", size="lg")
+            random_btn = gr.Button("🎲 Random X-Ray (Dataset)", variant="secondary", size="lg")
             clear_btn = gr.Button("🗑️ Clear Marks", variant="secondary", size="lg")
             compare_btn = gr.Button("✅ Compare with AI", variant="primary", size="lg")
 
@@ -386,11 +539,10 @@ def create_playground_tab(dataset_manager: TeethDatasetManager):
                 </script>
                 """)
                 
-                # Use gr.Image with interactive=False to prevent drag/drop behavior
-                # This is critical to prevent Firefox from dragging the image
+                # Use gr.Image with filepath type to fix corruption issues
                 playground_image = gr.Image(
                     label="Click on dental issues you spot",
-                    type="pil",
+                    type="filepath",  # Changed from "pil" to fix corruption
                     height=500,
                     show_label=True,
                     elem_id="playground_image",
@@ -401,7 +553,7 @@ def create_playground_tab(dataset_manager: TeethDatasetManager):
                 # Show AI result after comparison
                 ai_result_image = gr.Image(
                     label="AI Detection Result",
-                    type="pil",
+                    type="filepath",  # Changed from "pil" to fix corruption
                     interactive=False,
                     height=500
                 )
@@ -412,10 +564,21 @@ def create_playground_tab(dataset_manager: TeethDatasetManager):
         # Stats
         stats_md = gr.Markdown("**Stats:** Attempts: 0 | Avg Score: 0%")
 
-        # Wire up events with dataset_manager bound
+        # Wire up events
+        def load_upload(img, state):
+            return load_uploaded_image(img, state)
+        
         def load_random(state):
             return load_random_playground_image(state, dataset_manager)
         
+        # Upload button - primary method
+        upload_btn.click(
+            fn=load_upload,
+            inputs=[image_upload, playground_state],
+            outputs=[playground_image, ai_result_image, playground_state, results_md, stats_md]
+        )
+        
+        # Random button - fallback (may not work if dataset is corrupted)
         random_btn.click(
             fn=load_random,
             inputs=[playground_state],

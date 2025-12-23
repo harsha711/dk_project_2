@@ -146,12 +146,14 @@ def process_chat_message(
         yolo_summary = None
         
         # Check if we need to run YOLO (new image) or retrieve previous YOLO results (follow-up)
+        # IMPORTANT: Only retrieve previous YOLO results if there's a current image (follow-up scenario)
         previous_yolo_detections = None
-        for entry in reversed(conversation_state):
-            if entry.get("role") == "assistant" and entry.get("yolo_detections"):
-                previous_yolo_detections = entry.get("yolo_detections", [])
-                print(f"[YOLO CONTEXT] Found previous YOLO detections: {len(previous_yolo_detections)} detections")
-                break
+        if current_image:  # Only search for previous YOLO if we have a current image
+            for entry in reversed(conversation_state):
+                if entry.get("role") == "assistant" and entry.get("yolo_detections"):
+                    previous_yolo_detections = entry.get("yolo_detections", [])
+                    print(f"[YOLO CONTEXT] Found previous YOLO detections: {len(previous_yolo_detections)} detections")
+                    break
         
         if mode == "vision" and current_image:
             # New image - run YOLO detection
@@ -186,7 +188,7 @@ IMPORTANT: These detection results are from actual X-ray analysis. Use them to a
                 print(f"  ⚠️ YOLO detection failed or found no teeth: {yolo_result.get('summary', 'Unknown error')}")
                 yolo_summary = f"YOLO Detection: {yolo_result.get('summary', 'No teeth detected')}"
         elif previous_yolo_detections and current_image:
-            # Follow-up question - use previous YOLO results
+            # Follow-up question with image - use previous YOLO results
             print(f"\n[YOLO CONTEXT] Using previous YOLO detections for follow-up question")
             detection_details = []
             for det in previous_yolo_detections:
@@ -202,10 +204,15 @@ The user is asking a follow-up question about the X-ray that was previously anal
 - Findings: {', '.join(detection_details)}
 
 IMPORTANT: Use these detection results to answer the user's question. These are actual findings from the X-ray analysis. Do NOT say you cannot see the X-ray - these results ARE the X-ray analysis. Reference specific detections when answering questions about severity, position, impaction, or condition."""
+        else:
+            # No image and no previous YOLO results - text-only question
+            print(f"\n[YOLO CONTEXT] No X-ray image available - text-only question")
+            yolo_summary = None  # Explicitly set to None to prevent any YOLO context
 
         # Modify context to include YOLO results for text models
+        # IMPORTANT: Only add YOLO summary if we actually have YOLO results (yolo_summary is not None)
         analysis_context = context.copy()
-        if yolo_summary:
+        if yolo_summary is not None:
             # Add YOLO results to the last user message for text model analysis
             if analysis_context and analysis_context[-1]['role'] == 'user':
                 original_content = analysis_context[-1]['content']
@@ -213,11 +220,13 @@ IMPORTANT: Use these detection results to answer the user's question. These are 
                     "role": "user",
                     "content": f"{original_content}\n\n{yolo_summary}"
                 }
-                print(f"[CONTEXT DEBUG] Added YOLO summary to user message")
+                print(f"[CONTEXT DEBUG] ✅ Added YOLO summary to user message")
                 print(f"  Original: {original_content[:100]}...")
                 print(f"  With YOLO: {analysis_context[-1]['content'][:200]}...")
             else:
                 print(f"[CONTEXT DEBUG] ⚠️ Could not add YOLO summary - context structure issue")
+        else:
+            print(f"[CONTEXT DEBUG] ℹ️ No YOLO summary - text-only question (no X-ray context)")
 
         # Call models (async) - now with YOLO context for vision mode
         loop = asyncio.new_event_loop()
@@ -992,195 +1001,196 @@ with gr.Blocks(css=custom_css, title="Dental AI Platform", theme=gr.themes.Soft(
             )
 
         # ============ TAB 2: DATASET EXPLORER ============
-        with gr.Tab("📊 Dataset Explorer"):
-            gr.Markdown("""
-            ### Explore the RayanAi Dental X-Ray Dataset (1,206 samples)
-            Browse samples and **send them directly to AI for analysis**!
-            
-            1. Click **Load Dataset** to fetch from Hugging Face
-            2. Browse using Previous/Next or Random
-            3. Click **🔬 Analyze with AI** to get wisdom tooth detection
-            """)
-
-            with gr.Row():
-                load_dataset_btn = gr.Button("📥 Load Dataset from Hugging Face", variant="primary", size="lg")
-
-            dataset_info = gr.Markdown(value="Click 'Load Dataset' to start...")
-
-            def load_hf_dataset():
-                # Use lazy loading - only load metadata
-                result = dataset_manager.load_metadata()
-                if result["success"]:
-                    return f"""✅ **Dataset Ready (Lazy Loading Enabled)**
-
-**Total Samples:** {result['total_samples']}
-**Cache Size:** {result['cache_size']} images
-**Dataset:** RayanAi/Main_teeth_dataset
-
-💡 **{result['tip']}**
-
-Use the navigation buttons to explore samples one at a time!"""
-                else:
-                    return result["message"]
-
-            def browse_sample(index: int):
-                result = dataset_manager.get_sample(index)
-                if result["success"]:
-                    info = f"""**Sample #{result['index']} of {result['total']}**
-
-**Label:** {result['label']}
-**Class:** {"images" if result['label'] == 0 else "labels"}"""
-                    return result['image'], info, result['index']
-                else:
-                    return None, f"❌ {result['error']}", index
-
-            def next_sample(current_idx: int):
-                if not dataset_manager.loaded:
-                    return None, "⚠️ Load dataset metadata first", 0
-                # Use lazy loading method
-                result = dataset_manager.get_next_sample(int(current_idx))
-                if result["success"]:
-                    info = f"""**Sample #{result['index']} of {result['total']}**
-
-**Label:** {result['label']}
-**Class:** {"images" if result['label'] == 0 else "labels"}
-**Cached:** {"Yes ✅" if result.get('cached', False) else "No (just loaded)"}"""
-                    return result['image'], info, result['index']
-                else:
-                    return None, f"❌ {result.get('error', 'Error loading sample')}", int(current_idx)
-
-            def prev_sample(current_idx: int):
-                if not dataset_manager.loaded:
-                    return None, "⚠️ Load dataset metadata first", 0
-                # Use lazy loading method
-                result = dataset_manager.get_previous_sample(int(current_idx))
-                if result["success"]:
-                    info = f"""**Sample #{result['index']} of {result['total']}**
-
-**Label:** {result['label']}
-**Class:** {"images" if result['label'] == 0 else "labels"}
-**Cached:** {"Yes ✅" if result.get('cached', False) else "No (just loaded)"}"""
-                    return result['image'], info, result['index']
-                else:
-                    return None, f"❌ {result.get('error', 'Error loading sample')}", int(current_idx)
-
-            def random_sample():
-                if not dataset_manager.loaded:
-                    return None, "⚠️ Load dataset metadata first", 0
-                # Get random index
-                import random
-                random_idx = random.randint(0, dataset_manager.total_samples - 1)
-                result = dataset_manager.get_sample(random_idx)
-                if result["success"]:
-                    info = f"""**Random Sample #{result['index']} of {result['total']}**
-
-**Label:** {result['label']}
-**Class:** {"images" if result['label'] == 0 else "labels"}"""
-                    return result['image'], info, result['index']
-                else:
-                    return None, f"❌ {result.get('error', 'Error loading sample')}", 0
-
-            load_dataset_btn.click(fn=load_hf_dataset, outputs=[dataset_info])
-
-            gr.Markdown("---\n### 🔍 Browse Samples")
-
-            with gr.Row():
-                with gr.Column(scale=2):
-                    sample_image = gr.Image(label="Sample Image", height=512)
-
-                with gr.Column(scale=1):
-                    sample_info = gr.Markdown(value="Load dataset and navigate samples...")
-                    current_index = gr.Number(value=0, label="Current Index", visible=False)
-
-                    with gr.Row():
-                        prev_btn = gr.Button("⬅️ Previous", scale=1)
-                        next_btn = gr.Button("Next ➡️", scale=1)
-
-                    random_btn = gr.Button("🎲 Random Sample", variant="secondary", size="lg")
-                    jump_index = gr.Number(label="Jump to Index", value=0, minimum=0, maximum=1205)
-                    jump_btn = gr.Button("Go to Index", size="lg")
-                    
-                    gr.Markdown("---")
-                    analyze_btn = gr.Button("🔬 Analyze with AI", variant="primary", size="lg")
-                    analyze_status = gr.Markdown(value="")
-            
-            # Analysis results section - shows results right here in Dataset Explorer
-            gr.Markdown("---\n### 🤖 AI Analysis Results")
-            analysis_output = gr.Markdown(value="*Click 'Analyze with AI' on a sample to see results here*")
-            analysis_gallery = gr.Gallery(
-                label="📊 Annotated X-Ray (Click to maximize)",
-                show_label=True,
-                columns=1,
-                rows=1,
-                height=350,
-                object_fit="contain",
-                visible=False,
-                allow_preview=True,
-                preview=True
-            )
-
-            # Function to send dataset image to chatbot for analysis
-            def analyze_dataset_image(image, current_idx):
-                if image is None:
-                    return "❌ No image loaded. Please load the dataset and select a sample first."
-                return f"✅ **Sample #{int(current_idx)}** sent to AI for analysis! Check the results below."
-            
-            def run_analysis_on_sample(image, history, conversation_state, stored_annotated_images):
-                """Run AI analysis on the dataset sample"""
-                if image is None:
-                    return history, stored_annotated_images, gr.update(visible=False), conversation_state, stored_annotated_images, "❌ No image to analyze", "❌ No image to analyze", [], gr.update(visible=False)
-                
-                # Convert numpy array to PIL Image if needed
-                if not isinstance(image, Image.Image):
-                    image = Image.fromarray(image)
-                
-                # Save image temporarily for processing
-                import tempfile
-                import os
-                temp_path = os.path.join(tempfile.gettempdir(), "dataset_sample.png")
-                image.save(temp_path)
-                
-                # Call the main processing function
-                result = process_chat_message(
-                    message="Analyze this dental X-ray from the dataset. Identify any wisdom teeth and their condition.",
-                    image_file=temp_path,
-                    history=history,
-                    conversation_state=conversation_state,
-                    stored_annotated_images=stored_annotated_images
-                )
-                
-                # Clean up temp file
-                try:
-                    os.remove(temp_path)
-                except:
-                    pass
-                
-                # Extract the analysis text from the last assistant message in history
-                analysis_text = "Analysis complete!"
-                if result[0] and len(result[0]) > 0:
-                    last_msg = result[0][-1]
-                    if isinstance(last_msg, dict) and last_msg.get('role') == 'assistant':
-                        analysis_text = last_msg.get('content', 'Analysis complete!')
-                
-                # Get annotated images - same format as chatbot: list of (image, label) tuples
-                annotated_imgs = result[3] if result[3] else []
-                gallery_visible = len(annotated_imgs) > 0
-                
-                # Return: history, stored_images, gallery_update, conversation_state, stored_images, status, analysis_text, analysis_gallery_images, analysis_gallery_visible
-                return result[0], result[3], result[4], result[5], result[6], "✅ Analysis complete!", analysis_text, annotated_imgs, gr.update(visible=gallery_visible)
-
-            # Navigation events
-            next_btn.click(fn=next_sample, inputs=[current_index], outputs=[sample_image, sample_info, current_index])
-            prev_btn.click(fn=prev_sample, inputs=[current_index], outputs=[sample_image, sample_info, current_index])
-            random_btn.click(fn=random_sample, outputs=[sample_image, sample_info, current_index])
-            jump_btn.click(fn=browse_sample, inputs=[jump_index], outputs=[sample_image, sample_info, current_index])
-            
-            # Analyze button - sends to chatbot AND shows results here
-            analyze_btn.click(
-                fn=run_analysis_on_sample,
-                inputs=[sample_image, chatbot, conversation_state, stored_annotated_images],
-                outputs=[chatbot, annotated_gallery, annotated_gallery, conversation_state, stored_annotated_images, analyze_status, analysis_output, analysis_gallery, analysis_gallery]
-            )
+        # COMMENTED OUT - Dataset Explorer tab disabled
+        # with gr.Tab("📊 Dataset Explorer"):
+        #     gr.Markdown("""
+        #     ### Explore the RayanAi Dental X-Ray Dataset (1,206 samples)
+        #     Browse samples and **send them directly to AI for analysis**!
+        #     
+        #     1. Click **Load Dataset** to fetch from Hugging Face
+        #     2. Browse using Previous/Next or Random
+        #     3. Click **🔬 Analyze with AI** to get wisdom tooth detection
+        #     """)
+        #
+        #     with gr.Row():
+        #         load_dataset_btn = gr.Button("📥 Load Dataset from Hugging Face", variant="primary", size="lg")
+        #
+        #     dataset_info = gr.Markdown(value="Click 'Load Dataset' to start...")
+        #
+        #     def load_hf_dataset():
+        #         # Use lazy loading - only load metadata
+        #         result = dataset_manager.load_metadata()
+        #         if result["success"]:
+        #             return f"""✅ **Dataset Ready (Lazy Loading Enabled)**
+        #
+        # **Total Samples:** {result['total_samples']}
+        # **Cache Size:** {result['cache_size']} images
+        # **Dataset:** RayanAi/Main_teeth_dataset
+        #
+        # 💡 **{result['tip']}**
+        #
+        # Use the navigation buttons to explore samples one at a time!"""
+        #         else:
+        #             return result["message"]
+        #
+        #     def browse_sample(index: int):
+        #         result = dataset_manager.get_sample(index)
+        #         if result["success"]:
+        #             info = f"""**Sample #{result['index']} of {result['total']}**
+        #
+        # **Label:** {result['label']}
+        # **Class:** {"images" if result['label'] == 0 else "labels"}"""
+        #             return result['image'], info, result['index']
+        #         else:
+        #             return None, f"❌ {result['error']}", index
+        #
+        #     def next_sample(current_idx: int):
+        #         if not dataset_manager.loaded:
+        #             return None, "⚠️ Load dataset metadata first", 0
+        #         # Use lazy loading method
+        #         result = dataset_manager.get_next_sample(int(current_idx))
+        #         if result["success"]:
+        #             info = f"""**Sample #{result['index']} of {result['total']}**
+        #
+        # **Label:** {result['label']}
+        # **Class:** {"images" if result['label'] == 0 else "labels"}
+        # **Cached:** {"Yes ✅" if result.get('cached', False) else "No (just loaded)"}"""
+        #             return result['image'], info, result['index']
+        #         else:
+        #             return None, f"❌ {result.get('error', 'Error loading sample')}", int(current_idx)
+        #
+        #     def prev_sample(current_idx: int):
+        #         if not dataset_manager.loaded:
+        #             return None, "⚠️ Load dataset metadata first", 0
+        #         # Use lazy loading method
+        #         result = dataset_manager.get_previous_sample(int(current_idx))
+        #         if result["success"]:
+        #             info = f"""**Sample #{result['index']} of {result['total']}**
+        #
+        # **Label:** {result['label']}
+        # **Class:** {"images" if result['label'] == 0 else "labels"}
+        # **Cached:** {"Yes ✅" if result.get('cached', False) else "No (just loaded)"}"""
+        #             return result['image'], info, result['index']
+        #         else:
+        #             return None, f"❌ {result.get('error', 'Error loading sample')}", int(current_idx)
+        #
+        #     def random_sample():
+        #         if not dataset_manager.loaded:
+        #             return None, "⚠️ Load dataset metadata first", 0
+        #         # Get random index
+        #         import random
+        #         random_idx = random.randint(0, dataset_manager.total_samples - 1)
+        #         result = dataset_manager.get_sample(random_idx)
+        #         if result["success"]:
+        #             info = f"""**Random Sample #{result['index']} of {result['total']}**
+        #
+        # **Label:** {result['label']}
+        # **Class:** {"images" if result['label'] == 0 else "labels"}"""
+        #             return result['image'], info, result['index']
+        #         else:
+        #             return None, f"❌ {result.get('error', 'Error loading sample')}", 0
+        #
+        #     load_dataset_btn.click(fn=load_hf_dataset, outputs=[dataset_info])
+        #
+        #     gr.Markdown("---\n### 🔍 Browse Samples")
+        #
+        #     with gr.Row():
+        #         with gr.Column(scale=2):
+        #             sample_image = gr.Image(label="Sample Image", height=512)
+        #
+        #         with gr.Column(scale=1):
+        #             sample_info = gr.Markdown(value="Load dataset and navigate samples...")
+        #             current_index = gr.Number(value=0, label="Current Index", visible=False)
+        #
+        #             with gr.Row():
+        #                 prev_btn = gr.Button("⬅️ Previous", scale=1)
+        #                 next_btn = gr.Button("Next ➡️", scale=1)
+        #
+        #             random_btn = gr.Button("🎲 Random Sample", variant="secondary", size="lg")
+        #             jump_index = gr.Number(label="Jump to Index", value=0, minimum=0, maximum=1205)
+        #             jump_btn = gr.Button("Go to Index", size="lg")
+        #             
+        #             gr.Markdown("---")
+        #             analyze_btn = gr.Button("🔬 Analyze with AI", variant="primary", size="lg")
+        #             analyze_status = gr.Markdown(value="")
+        #     
+        #     # Analysis results section - shows results right here in Dataset Explorer
+        #     gr.Markdown("---\n### 🤖 AI Analysis Results")
+        #     analysis_output = gr.Markdown(value="*Click 'Analyze with AI' on a sample to see results here*")
+        #     analysis_gallery = gr.Gallery(
+        #         label="📊 Annotated X-Ray (Click to maximize)",
+        #         show_label=True,
+        #         columns=1,
+        #         rows=1,
+        #         height=350,
+        #         object_fit="contain",
+        #         visible=False,
+        #         allow_preview=True,
+        #         preview=True
+        #     )
+        #
+        #     # Function to send dataset image to chatbot for analysis
+        #     def analyze_dataset_image(image, current_idx):
+        #         if image is None:
+        #             return "❌ No image loaded. Please load the dataset and select a sample first."
+        #         return f"✅ **Sample #{int(current_idx)}** sent to AI for analysis! Check the results below."
+        #     
+        #     def run_analysis_on_sample(image, history, conversation_state, stored_annotated_images):
+        #         \"\"\"Run AI analysis on the dataset sample\"\"\"
+        #         if image is None:
+        #             return history, stored_annotated_images, gr.update(visible=False), conversation_state, stored_annotated_images, "❌ No image to analyze", "❌ No image to analyze", [], gr.update(visible=False)
+        #         
+        #         # Convert numpy array to PIL Image if needed
+        #         if not isinstance(image, Image.Image):
+        #             image = Image.fromarray(image)
+        #         
+        #         # Save image temporarily for processing
+        #         import tempfile
+        #         import os
+        #         temp_path = os.path.join(tempfile.gettempdir(), "dataset_sample.png")
+        #         image.save(temp_path)
+        #         
+        #         # Call the main processing function
+        #         result = process_chat_message(
+        #             message="Analyze this dental X-ray from the dataset. Identify any wisdom teeth and their condition.",
+        #             image_file=temp_path,
+        #             history=history,
+        #             conversation_state=conversation_state,
+        #             stored_annotated_images=stored_annotated_images
+        #         )
+        #         
+        #         # Clean up temp file
+        #         try:
+        #             os.remove(temp_path)
+        #         except:
+        #             pass
+        #         
+        #         # Extract the analysis text from the last assistant message in history
+        #         analysis_text = "Analysis complete!"
+        #         if result[0] and len(result[0]) > 0:
+        #             last_msg = result[0][-1]
+        #             if isinstance(last_msg, dict) and last_msg.get('role') == 'assistant':
+        #                 analysis_text = last_msg.get('content', 'Analysis complete!')
+        #         
+        #         # Get annotated images - same format as chatbot: list of (image, label) tuples
+        #         annotated_imgs = result[3] if result[3] else []
+        #         gallery_visible = len(annotated_imgs) > 0
+        #         
+        #         # Return: history, stored_images, gallery_update, conversation_state, stored_images, status, analysis_text, analysis_gallery_images, analysis_gallery_visible
+        #         return result[0], result[3], result[4], result[5], result[6], "✅ Analysis complete!", analysis_text, annotated_imgs, gr.update(visible=gallery_visible)
+        #
+        #     # Navigation events
+        #     next_btn.click(fn=next_sample, inputs=[current_index], outputs=[sample_image, sample_info, current_index])
+        #     prev_btn.click(fn=prev_sample, inputs=[current_index], outputs=[sample_image, sample_info, current_index])
+        #     random_btn.click(fn=random_sample, outputs=[sample_image, sample_info, current_index])
+        #     jump_btn.click(fn=browse_sample, inputs=[jump_index], outputs=[sample_image, sample_info, current_index])
+        #     
+        #     # Analyze button - sends to chatbot AND shows results here
+        #     analyze_btn.click(
+        #         fn=run_analysis_on_sample,
+        #         inputs=[sample_image, chatbot, conversation_state, stored_annotated_images],
+        #         outputs=[chatbot, annotated_gallery, annotated_gallery, conversation_state, stored_annotated_images, analyze_status, analysis_output, analysis_gallery, analysis_gallery]
+        #     )
 
         # ============ TAB 3: ANNOTATION PLAYGROUND ============
         create_playground_tab(dataset_manager)
@@ -1203,9 +1213,9 @@ if __name__ == "__main__":
     print("     - Ask questions about wisdom teeth")
     print("     - Upload X-rays for analysis")
     print("     - Annotated images persist during follow-ups")
-    print("  ✅ Tab 2: Dataset Explorer (1,206 samples)")
-    print("     - Browse HuggingFace dental X-ray dataset")
-    print("     - One-click AI analysis on any sample")
+    # print("  ✅ Tab 2: Dataset Explorer (1,206 samples)")
+    # print("     - Browse HuggingFace dental X-ray dataset")
+    # print("     - One-click AI analysis on any sample")
     print("  ✅ Tab 3: Annotation Playground")
     print("     - Test your diagnostic skills")
     print("     - Click-based annotation (no external libraries)")
