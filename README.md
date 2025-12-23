@@ -1,4 +1,4 @@
-# 🦷 Dental AI Platform v2.3
+# 🦷 Dental AI Platform v2.4
 
 **Multi-Model AI System for Dental X-Ray Analysis**
 
@@ -9,10 +9,12 @@ Combines YOLOv8 object detection with 3 text-based AI models to provide accurate
 ## 🎯 Key Features
 
 ✅ **Custom YOLO Detection** - Trained on 1,075 dental X-rays (88% mAP accuracy)  
-✅ **Multi-Model AI Analysis** - GPT-4o-mini, Llama 3.3 70B, Qwen 2.5 32B (consensus)  
+✅ **Multi-Model AI Analysis** - GPT-4o-mini, Llama 3.3 70B, Qwen 3 32B (consensus)  
 ✅ **Visual Annotations** - Automatic bounding boxes on detected pathologies  
 ✅ **Conversational Interface** - Ask follow-up questions about findings  
-✅ **Real-Time Processing** - <100ms detection + parallel AI inference
+✅ **Real-Time Processing** - <100ms detection + parallel AI inference  
+✅ **Smart Dataset Filtering** - Automatically skips binary/mask images, only shows real X-rays  
+✅ **Local Dataset Support** - Automatically detects and uses local YOLO format datasets
 
 ---
 
@@ -52,11 +54,19 @@ Access at: **http://localhost:7860**
 
 ## 📚 Documentation
 
-| Document | Description |
-|----------|-------------|
-| [COMPLETE_DOCUMENTATION.md](COMPLETE_DOCUMENTATION.md) | Full technical documentation |
-| [PROJECT_EVOLUTION.md](PROJECT_EVOLUTION.md) | Development journey & architecture evolution |
-| [docs/TRAINING_GUIDE.md](docs/TRAINING_GUIDE.md) | YOLO model training instructions |
+**📖 [DENTAL_AI_COMPLETE_GUIDE.md](DENTAL_AI_COMPLETE_GUIDE.md)** - Complete consolidated documentation covering:
+- Quick start guide
+- System architecture
+- Installation & setup
+- Usage guide
+- YOLO training guide
+- API reference
+- Configuration
+- Troubleshooting
+- Project evolution
+- Quick reference
+
+This is the **single source of truth** for all project documentation.
 
 ---
 
@@ -96,7 +106,7 @@ Bounding Boxes   Clinical Analysis
 ## 🛠️ Technology Stack
 
 - **Object Detection**: YOLOv8n (Ultralytics)
-- **AI Models**: GPT-4o-mini, Llama 3.3 70B, Qwen 2.5 32B
+- **AI Models**: GPT-4o-mini, Llama 3.3 70B, Qwen 3 32B
 - **Web Interface**: Gradio
 - **Deep Learning**: PyTorch 2.9.1 + CUDA 12.8
 - **Image Processing**: Pillow
@@ -188,7 +198,7 @@ NOT for clinical diagnosis. Consult qualified dental professionals.
 ## 👨‍💻 Author
 
 **Harsha**  
-Version: 2.3  
+Version: 2.4  
 December 2025
 
 ---
