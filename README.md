@@ -212,4 +212,4 @@ December 2025
 
 ---
 
-**Built with ❤️ for dental AI**
+
