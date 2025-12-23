@@ -34,13 +34,6 @@ TAB 2 - "Multi-Model Chatbot":
 
 # December 2025
 
-**Platform**: Claude (Cursor)
-
-**Prompt**: comment the data explorer tab
-
-**Result**: Commented out the entire Dataset Explorer tab in `dental_ai_unified.py` while preserving the code for future use. The tab is now disabled and won't appear in the UI.
-
----
 
 **Prompt**: create one final consolidated document that has everything in it, remove only those docs that feel unnecessary
 
@@ -80,14 +73,6 @@ TAB 2 - "Multi-Model Chatbot":
 - Architecture trade-offs and alternatives
 - Key learnings & best practices
 
----
-
-**Prompt**: update readme with correct qwen model
-
-**Result**: Updated `README.md` to reflect the correct Qwen model name:
-- Changed "Qwen 2.5 32B" → "Qwen 3 32B" in Key Features section
-- Changed "Qwen 2.5 32B" → "Qwen 3 32B" in Technology Stack section
-- Updated version from v2.3 to v2.4
 
 ---
 
@@ -114,7 +99,7 @@ TAB 2 - "Multi-Model Chatbot":
 
 ---
 
-**Prompt**: we have this dataset locally stored right? can we use that instead of retreiving it from huggingface?
+**Prompt**: i have this dataset locally stored right? can i use that instead of retreiving it from huggingface?
 
 **Result**: Added automatic local dataset detection:
 - System checks for local YOLO format datasets in common locations:
@@ -166,14 +151,4 @@ TAB 2 - "Multi-Model Chatbot":
 - All documentation now reflects binary filtering, filepath display, and quality improvements
 
 ---
-
-**Prompt**: and remove unnecessary files
-
-**Result**: Cleaned up project by removing:
-- Test scripts: `test_dataset_images.py`, `test_gradio_display.py`
-- Test images: `test_image_0.png` through `test_image_4.png` (5 files)
-- Test images: `gradio_test_0.png` through `gradio_test_2.png` (3 files)
-- All `__pycache__` directories
-- All `.pyc` files
-- Project now contains only production code and essential utilities
 
